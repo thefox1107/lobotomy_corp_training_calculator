@@ -47,6 +47,6 @@
 
 ### 参考工作簿引用与致谢
 
-《脑叶公司异想体推荐表_加班计算器.xlsx》，作者 bilibili@掉落的银杏。本项目参考其中的“异想体推荐表”工作表，整理了异想体收容推荐、E.G.O 武器与防具推荐及镇压信息；原表注明的配套视频为 BV1uN4y1V7sY。感谢作者整理并分享这些资料。原始工作簿未随仓库发布；上述表格资料不因本项目代码采用 GPL 而变为本项目原创内容。
+《脑叶公司异想体推荐表_加班计算器.xlsx》，作者 bilibili@[掉落的银杏](https://space.bilibili.com/1929684)。本项目参考其中的“异想体推荐表”工作表，整理了异想体收容推荐、E.G.O 武器与防具推荐及镇压信息；原表注明的配套视频为 [BV1uN4y1V7sY](https://www.bilibili.com/video/BV1uN4y1V7sY/?share_source=copy_web&vd_source=62c330daf4738bf83b642d0d55c3f42f)。感谢作者整理并分享这些资料。原始工作簿未随仓库发布；上述表格资料不因本项目代码采用 GPL 而变为本项目原创内容。
 
 `data/` 中整理的异想体资料，以及由其生成的 `native/catalog.hpp` 中的资料部分，保留原始来源的权利和授权要求，不因本项目代码采用 GPL 而变为本项目原创内容。Fandom Wiki 社区内容有独立的 [授权说明](https://community.fandom.com/wiki/Help%3ALicensing)；本地参考工作簿不随仓库发布。本项目不代表 Wiki 或游戏官方认可。
