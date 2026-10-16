@@ -2,6 +2,7 @@
 *.ini
 build/
 dist/
+node_modules/
 
 # 编辑器
 .vscode/

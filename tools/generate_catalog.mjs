@@ -1,12 +1,30 @@
 import {writeFileSync} from 'node:fs';
 import {ABNORMALITIES,PREFERENCES,NO_REGULAR_WORK} from '../data/catalog.mjs';
-const wide=s=>'L"'+[...s].map(c=>{const n=c.codePointAt(0);return n<128&&c!=='"'&&c!=='\\'?c:n<=0xffff?'\\u'+n.toString(16).padStart(4,'0'):'\\U'+n.toString(16).padStart(8,'0')}).join('')+'"';
+import {RECOMMENDATIONS} from '../data/recommendations.mjs';
+import {EGO_LIMITS} from '../data/ego_limits.mjs';
+import {EGO_NAMES} from '../data/ego_names.mjs';
+import {SEARCH_PINYIN} from '../data/search_pinyin.mjs';
+const wide=s=>'L"'+[...s].map(c=>{
+  if(c==='\\')return '\\\\';
+  if(c==='"')return '\\"';
+  if(c==='\n')return '\\n';
+  if(c==='\r')return '\\r';
+  if(c==='\t')return '\\t';
+  const n=c.codePointAt(0);
+  return n<128?c:n<=0xffff?'\\u'+n.toString(16).padStart(4,'0'):'\\U'+n.toString(16).padStart(8,'0');
+}).join('')+'"';
 const level={ZAYIN:0,TETH:1,HE:2,WAW:3,ALEPH:4};
 const rows=ABNORMALITIES.map(a=>{
   const p=PREFERENCES[a.id];
+  const recommendation=RECOMMENDATIONS[a.id];
+  const ego=EGO_LIMITS[a.id];
+  const egoNames=EGO_NAMES[a.id];
+  const search=SEARCH_PINYIN[a.id];
+  if(!recommendation||!ego||!egoNames||!search)throw Error(`Missing recommendation, E.G.O or search data for ${a.id}`);
+  if((ego.weapon&&!egoNames.weapon)||(ego.suit&&!egoNames.suit))throw Error(`Missing E.G.O name for ${a.id}`);
   const rates=p?.rates??Array.from({length:4},()=>Array(5).fill(-101));
   const matrix='{'+rates.map(r=>'{'+r.join(',')+'}').join(',')+'}';
-  return `  {${wide(a.id)},${wide(a.name)},${level[a.level]},${p?.boxes??0},${NO_REGULAR_WORK.has(a.id)?'false':'true'},${matrix}},`;
+  return `  {${wide(a.id)},${wide(a.name)},${level[a.level]},${p?.boxes??0},${NO_REGULAR_WORK.has(a.id)?'false':'true'},${matrix},${wide(recommendation.containment)},${wide(recommendation.weapon)},${wide(recommendation.suit)},${wide(recommendation.suppression)},${ego.weapon},${ego.suit},${wide(egoNames.weapon)},${wide(egoNames.suit)},${wide(search.abnormality.full)},${wide(search.abnormality.initials)},${wide(search.weapon.full)},${wide(search.weapon.initials)}},`;
 });
-writeFileSync(new URL('../native/catalog.hpp',import.meta.url),`#pragma once\n#include <array>\nstruct Abnormality { const wchar_t* id; const wchar_t* name; int level; int maxBoxes; bool regularWork; int rates[4][5]; };\nconstexpr Abnormality CATALOG[] = {\n${rows.join('\n')}\n};\nconstexpr int CATALOG_SIZE = sizeof(CATALOG)/sizeof(CATALOG[0]);\n`,'utf8');
+writeFileSync(new URL('../native/catalog.hpp',import.meta.url),`#pragma once\n#include <array>\nstruct Abnormality { const wchar_t* id; const wchar_t* name; int level; int maxBoxes; bool regularWork; int rates[4][5]; const wchar_t* containment; const wchar_t* weaponRecommendation; const wchar_t* suitRecommendation; const wchar_t* suppression; int egoWeaponMax; int egoSuitMax; const wchar_t* egoWeaponName; const wchar_t* egoSuitName; const wchar_t* abnormalityPinyin; const wchar_t* abnormalityInitials; const wchar_t* weaponPinyin; const wchar_t* weaponInitials; };\nconstexpr Abnormality CATALOG[] = {\n${rows.join('\n')}\n};\nconstexpr int CATALOG_SIZE = sizeof(CATALOG)/sizeof(CATALOG[0]);\n`,'utf8');
 console.log(`Generated ${rows.length} fixed-grade abnormalities`);
