@@ -54,7 +54,8 @@ static bool trackingRecommendationMouse=false;
 static int hoveredEgoRow=-1;
 static bool trackingEgoMouse=false;
 static HWND recommendationList,recommendationDetail,egoList,egoButtons[4],egoSearch,egoSearchCount;
-static std::array<std::vector<HWND>,5> pageControls;
+static constexpr int PAGE_COUNT=6,HELP_PAGE=5;
+static std::array<std::vector<HWND>,PAGE_COUNT> pageControls;
 struct ControlFrame { int page; HWND item; int x,y,w,h; };
 struct ControlLayout {
   HWND item;
@@ -68,7 +69,7 @@ static std::vector<ControlFrame> controlFrames;
 static std::vector<ControlLayout> controlLayouts;
 static std::vector<bool> contained;
 static std::array<int,CATALOG_SIZE> egoWeapons{},egoSuits{};
-static int currentPage=0;
+static int currentPage=HELP_PAGE;
 static int recommendationSortColumn=0;
 static bool recommendationDescending=false;
 static std::vector<int> recommendationOrder;
@@ -154,7 +155,8 @@ static const wchar_t* works[]={L"本能",L"洞察",L"沟通",L"压迫"};
 static const wchar_t* virtues[]={L"勇气",L"谨慎",L"自律",L"正义"};
 static const wchar_t* levels[]={L"ZAYIN",L"TETH",L"HE",L"WAW",L"ALEPH"};
 static const double expectedBoxes[]={5,8,12,18,23};
-static const wchar_t* pageNames[]={L"简单模式",L"详细模式",L"当前收容",L"收容推荐",L"E.G.O 库存"};
+static const wchar_t* pageNames[]={L"简单模式",L"详细模式",L"当前收容",L"收容推荐",L"E.G.O 库存",L"使用说明"};
+static constexpr int sidebarPages[]={HELP_PAGE,0,1,2,3,4};
 
 static std::wstring getText(HWND h){wchar_t buf[256]{};GetWindowTextW(h,buf,256);return buf;}
 static void setText(HWND h,const std::wstring& s){SetWindowTextW(h,s.c_str());}
@@ -623,27 +625,29 @@ static void paintResults(HDC dc){
 }
 static void paintQualityTable(HDC dc,int leftGrowth,int dy){
   const wchar_t* headers[]={L"品质等级",L"I",L"II",L"III",L"IV",L"V",L"EX"};
-  const wchar_t* values[3][7]={
-    {L"判定数值范围",L"1–29",L"30–44",L"45–64",L"65–84",L"85–100",L"100+"},
-    {L"训练需要的 LOB 点数",L"X",L"1",L"2",L"3",L"4",L"6"},
-    {L"训练至该等级可能出现的数值范围",L"20",L"30–37",L"45–55",L"65–75",L"85–92",L"110–130"}
-  };
+  const wchar_t* values[]={L"判定数值范围",L"1–29",L"30–44",L"45–64",L"65–84",L"85–100",L"100+"};
   const int x=45,top=713+dy,totalWidth=562+leftGrowth,rowHeight=25;
   const int labelWidth=217+leftGrowth/4;
-  for(int row=0;row<4;row++){
+  for(int row=0;row<2;row++){
     int y=top+row*rowHeight;
     fill(dc,x,y,totalWidth,rowHeight,row==0?HEADER_BG:(row%2?CARD:ROW));
-    draw(dc,row==0?headers[0]:values[row-1][0],x+8,y,labelWidth-12,rowHeight,
+    draw(dc,row==0?headers[0]:values[0],x+8,y,labelWidth-12,rowHeight,
          smallFont,row==0?INK:MUTED);
     for(int col=1;col<=6;col++){
       int left=x+labelWidth+(col-1)*(totalWidth-labelWidth)/6;
       int right=x+labelWidth+col*(totalWidth-labelWidth)/6;
-      draw(dc,row==0?headers[col]:values[row-1][col],left,y,right-left,rowHeight,
+      draw(dc,row==0?headers[col]:values[col],left,y,right-left,rowHeight,
            row==0?headerFont:smallFont,INK,DT_CENTER);
       line(dc,left,y+4,left,y+rowHeight-4,BORDER);
     }
     line(dc,x,y+rowHeight-1,x+totalWidth,y+rowHeight-1,BORDER);
   }
+  draw(dc,L"员工等级共 I～V 五级，由四项品质等级总和决定。",
+       x+8,765+dy,totalWidth-16,18,smallFont,MUTED);
+  draw(dc,L"除 V 级外，等级为四项品质等级总和除以 3 向下取整；",
+       x+8,783+dy,totalWidth-16,18,smallFont,MUTED);
+  draw(dc,L"V 级要求品质等级总和 ≥ 16。",
+       x+8,801+dy,totalWidth-16,18,smallFont,MUTED);
 }
 static void paintDetail(HDC dc){
   int leftGrowth=detailLeftGrowth(),rightGrowth=detailRightGrowth(),dy=extraHeight();
@@ -683,6 +687,28 @@ static void paintDetail(HDC dc){
        465+rightGrowth,22,smallFont,MUTED);
   SetViewportOrgEx(dc,previous.x,previous.y,nullptr);
 }
+static void paintHelp(HDC dc){
+  const int width=std::max(250,1090+extraWidth());
+  const struct {const wchar_t* title;const wchar_t* explanation;} steps[]={
+    {L"1  添加收容",L"在「当前收容」中添加已拥有的异想体。员工只能从这些对象中选择工作目标。"},
+    {L"2  填写员工",L"在「详细模式」填写当前属性、目标属性和工作异想体，程序会估算各类工作次数。"},
+    {L"3  记录进度",L"每完成一次工作，用「已完成」旁的 ＋ / − 调整次数；也可以直接输入。"},
+    {L"4  查看资料",L"「简单模式」汇总员工；「收容推荐」和「E.G.O 库存」可供规划与记录。"}
+  };
+  for(int i=0;i<4;i++){
+    int y=182+i*91;
+    rounded(dc,46,y,width,76,i%2?CARD:ROW,BORDER);
+    fill(dc,46,y+13,4,48,RED);
+    draw(dc,steps[i].title,66,y+8,width-42,27,sectionFont,INK);
+    draw(dc,steps[i].explanation,66,y+39,width-42,25,bodyFont,MUTED);
+  }
+  line(dc,46,570,46+width,570,BORDER);
+  section(dc,L"保存与更新",46,587,width);
+  draw(dc,L"所有输入自动保存至程序所在文件夹的 LobotomyCorpCal.ini；备份时请同时保留 exe 和 ini。",
+       47,623,width-8,24,bodyFont,INK);
+  draw(dc,L"启动时会检查新版本；离线也可正常使用。训练次数仅供规划，请以游戏内结果为准。",
+       47,657,width-8,24,bodyFont,MUTED);
+}
 static void paintOtherPage(HDC dc){
   paintHeader(dc,pageNames[currentPage],currentPage);
   card(dc,22,92,1156+extraWidth(),656+extraHeight());
@@ -691,12 +717,14 @@ static void paintOtherPage(HDC dc){
     L"",
     L"在这里添加或移除当前收容的异想体。员工只能选择已收容对象。",
     L"参考工作簿的原始推荐评级。点击编号、等级或收容推荐的表头可切换排序。",
-    L"按异想体或 E.G.O 名称搜索，支持汉字、拼音全拼和首字母；上限为 Wiki 列出的基础持有上限。"
+    L"按异想体或 E.G.O 名称搜索，支持汉字、拼音全拼和首字母；上限为 Wiki 列出的基础持有上限。",
+    L"从添加收容到记录训练进度，按下面四步即可开始使用。"
   };
   section(dc,pageNames[currentPage],45,106,std::max(250,1090+extraWidth()));
   draw(dc,descriptions[currentPage],46,132,std::max(250,1080+extraWidth()),23,smallFont,MUTED);
   if(currentPage==2)
     draw(dc,containmentMessage,46,205,1080,23,smallFont,RED);
+  if(currentPage==HELP_PAGE)paintHelp(dc);
 }
 static void paintSidebar(HDC dc){
   RECT client{};GetClientRect(win,&client);
@@ -707,11 +735,12 @@ static void paintSidebar(HDC dc){
   draw(dc,L"LC",25,26,34,34,sectionFont,CARD,DT_CENTER);
   draw(dc,L"管理面板",20,75,155,27,sectionFont,CARD);
   line(dc,20,105,170,105,RGB(63,76,80));
-  for(int i=0;i<5;i++){
+  for(int i=0;i<PAGE_COUNT;i++){
     int y=112+i*64;
-    if(i==currentPage){rounded(dc,8,y,174,52,PANEL,PANEL);fill(dc,8,y+9,4,34,RED);}
-    draw(dc,pageNames[i],22,y+7,152,38,bodyFont,
-         i==currentPage?CARD:RGB(191,198,197));
+    int page=sidebarPages[i];
+    if(page==currentPage){rounded(dc,8,y,174,52,PANEL,PANEL);fill(dc,8,y+9,4,34,RED);}
+    draw(dc,pageNames[page],22,y+7,152,38,bodyFont,
+         page==currentPage?CARD:RGB(191,198,197));
   }
   if(height>=520){
     line(dc,20,height-70,170,height-70,RGB(63,76,80));
@@ -1215,9 +1244,9 @@ static void rebuildEgoList(){
 }
 static void layoutControls();
 static void switchPage(int page){
-  if(page<0||page>=5||page==currentPage)return;
+  if(page<0||page>=PAGE_COUNT||page==currentPage)return;
   saveState();currentPage=page;
-  for(int i=0;i<5;i++)for(HWND item:pageControls[i])ShowWindow(item,i==page?SW_SHOW:SW_HIDE);
+  for(int i=0;i<PAGE_COUNT;i++)for(HWND item:pageControls[i])ShowWindow(item,i==page?SW_SHOW:SW_HIDE);
   if(page==0)rebuildSimpleList();
   layoutControls();
   InvalidateRect(win,nullptr,FALSE);
@@ -1351,7 +1380,8 @@ static void initialize(){
   loadActiveEmployee();
   for(int i=0;i<(int)employees.size();i++)writeEmployee(i);
   rebuildSimpleList();rebuildContainedLists();rebuildRecommendationList();rebuildEgoList();
-  for(int page=1;page<5;page++)for(HWND item:pageControls[page])ShowWindow(item,SW_HIDE);
+  for(int page=0;page<PAGE_COUNT;page++)if(page!=currentPage)
+    for(HWND item:pageControls[page])ShowWindow(item,SW_HIDE);
 }
 static int preferenceColumn(HWND child){
   for(int i=0;i<4;i++)for(int j=0;j<5;j++)if(child==rates[i][j])return i;
@@ -1562,8 +1592,8 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
       break;
     case WM_LBUTTONDOWN:{
       int x=(short)LOWORD(lp),y=(short)HIWORD(lp);
-      if(x>=8&&x<SIDEBAR_WIDTH&&y>=112&&y<112+5*64){
-        switchPage((y-112)/64);return 0;
+      if(x>=8&&x<SIDEBAR_WIDTH&&y>=112&&y<112+PAGE_COUNT*64){
+        switchPage(sidebarPages[(y-112)/64]);return 0;
       }
       int contentX=x-SIDEBAR_WIDTH+scrollX;
       int contentY=y+scrollY;
