@@ -106,8 +106,8 @@ export const SEARCH_PINYIN = {
       "initials": "176zh"
     },
     "weapon": {
-      "full": "",
-      "initials": ""
+      "full": "zaoyin",
+      "initials": "zy"
     }
   },
   "O-05-30": {
@@ -436,8 +436,8 @@ export const SEARCH_PINYIN = {
       "initials": "mzdyl"
     },
     "weapon": {
-      "full": "",
-      "initials": ""
+      "full": "chenzui",
+      "initials": "cz"
     }
   },
   "O-04-72": {

@@ -24,7 +24,7 @@ inline bool fuzzyContains(const std::wstring& field,const std::wstring& query){
 inline bool matchesEgoSearch(const Abnormality& abnormality,const std::wstring& query){
   const auto needle=normalizeEgoSearch(query);
   if(needle.empty())return true;
-  for(const wchar_t* value:{abnormality.name,abnormality.egoWeaponName,
+  for(const wchar_t* value:{abnormality.name,abnormality.egoWeaponName,abnormality.egoSuitName,
                             abnormality.abnormalityPinyin,abnormality.abnormalityInitials,
                             abnormality.weaponPinyin,abnormality.weaponInitials})
     if(fuzzyContains(normalizeEgoSearch(value),needle))return true;

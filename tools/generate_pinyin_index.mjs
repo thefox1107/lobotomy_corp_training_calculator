@@ -15,11 +15,12 @@ function searchableParts(value){
 
 const result={};
 for(const abnormality of ABNORMALITIES){
-  const weapon=EGO_NAMES[abnormality.id]?.weapon;
-  if(weapon===undefined)throw Error(`Missing E.G.O name: ${abnormality.id}`);
+  const names=EGO_NAMES[abnormality.id];
+  if(!names)throw Error(`Missing E.G.O name: ${abnormality.id}`);
+  const egoName=names.weapon||names.suit;
   result[abnormality.id]={
     abnormality:searchableParts(abnormality.name),
-    weapon:searchableParts(weapon),
+    weapon:searchableParts(egoName),
   };
 }
 writeFileSync(new URL('../data/search_pinyin.mjs',import.meta.url),

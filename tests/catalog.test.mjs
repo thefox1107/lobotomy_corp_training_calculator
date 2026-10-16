@@ -40,6 +40,9 @@ test('推荐表与 E.G.O 上限覆盖所有异想体',()=>{
       assert.ok(Number.isInteger(ego[field])&&ego[field]>=0&&ego[field]<=5,`${id} ${field}`);
     for(const field of ['weapon','suit'])
       assert.equal(Boolean(names[field]),ego[field]>0,`${id} ${field} name`);
+    if(ego.weapon&&ego.suit)assert.equal(names.weapon,names.suit,`${id} E.G.O name`);
+    if(ego.suit&&!ego.weapon)
+      assert.ok(SEARCH_PINYIN[id].weapon.full,`${id} E.G.O pinyin`);
     for(const field of ['abnormality','weapon']){
       assert.match(SEARCH_PINYIN[id][field].full,/^[a-z0-9]*$/);
       assert.match(SEARCH_PINYIN[id][field].initials,/^[a-z0-9]*$/);

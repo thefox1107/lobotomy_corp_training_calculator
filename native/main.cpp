@@ -1,6 +1,9 @@
 #include <windows.h>
 #include <commctrl.h>
+#include <shellapi.h>
 #include <string>
+#include <thread>
+#include <memory>
 #include <sstream>
 #include <iomanip>
 #include <algorithm>
@@ -11,6 +14,15 @@
 #include "catalog.hpp"
 #include "core.hpp"
 #include "ego_search.hpp"
+#include "ego_recommendation.hpp"
+#include "updater.hpp"
+
+static constexpr UINT WM_UPDATE_FOUND=WM_APP+51;
+static constexpr UINT WM_UPDATE_DOWNLOADED=WM_APP+52;
+struct UpdateDownloadResult {bool success;std::wstring error;};
+static std::wstring programPath;
+static bool updateDownloading=false,updateReady=false;
+static int updateCleanupTicks=0;
 
 static constexpr COLORREF BG=RGB(242,244,243), CARD=RGB(255,255,255);
 static constexpr COLORREF DARK=RGB(28,38,43), INK=RGB(36,47,50);
@@ -30,12 +42,28 @@ static constexpr COLORREF RISK_COLORS[]={
 };
 static HWND win,abnoBox,nameEdit,riskText,capBox,stats[4],targets[4],done[4];
 static HWND techBox,residentBox,clerksBox,rates[4][5],doneMinus[4],donePlus[4],virtueLabels[4];
+static HWND abnoLabel,capLabel,attributeHeaders[4],residentLabel,clerksLabel;
 static HWND tabs;
 static HWND simpleList,containedList,availableCombo,containAddButton,containRemoveButton;
+static int hoveredSimpleRow=-1;
+static bool trackingSimpleMouse=false;
+static int hoveredContainedRow=-1;
+static bool trackingContainedMouse=false;
+static int hoveredRecommendationRow=-1;
+static bool trackingRecommendationMouse=false;
+static int hoveredEgoRow=-1;
+static bool trackingEgoMouse=false;
 static HWND recommendationList,recommendationDetail,egoList,egoButtons[4],egoSearch,egoSearchCount;
 static std::array<std::vector<HWND>,5> pageControls;
 struct ControlFrame { int page; HWND item; int x,y,w,h; };
-struct ControlLayout { HWND item; int page,x,y,w,h,id; bool combo,list,framed; };
+struct ControlLayout {
+  HWND item;
+  int page,x,y,w,h,id;
+  bool combo,list,framed;
+  bool placed=false;
+  int lastX=0,lastY=0,lastW=0,lastH=0;
+  int clipLeft=0,clipTop=0,clipRight=0,clipBottom=0;
+};
 static std::vector<ControlFrame> controlFrames;
 static std::vector<ControlLayout> controlLayouts;
 static std::vector<bool> contained;
@@ -45,12 +73,14 @@ static int recommendationSortColumn=0;
 static bool recommendationDescending=false;
 static std::vector<int> recommendationOrder;
 static std::vector<int> egoOrder;
-static bool egoIdDescending=false;
+static int egoSortColumn=0;
+static bool egoSortDescending=false;
 static std::wstring containmentMessage;
 static constexpr int SIDEBAR_WIDTH=190;
 static constexpr int BASE_WIDTH=SIDEBAR_WIDTH+1200,BASE_HEIGHT=770;
 static constexpr int MIN_WIDTH=900,MIN_HEIGHT=500;
-static constexpr int DETAIL_SCROLL_WIDTH=1180,DETAIL_SCROLL_HEIGHT=752;
+static constexpr int DETAIL_SCROLL_WIDTH=1180,DETAIL_SCROLL_HEIGHT=830;
+static constexpr int DETAIL_LAYOUT_HEIGHT=850;
 static constexpr DWORD WINDOW_STYLE=WS_OVERLAPPED|WS_CAPTION|WS_SYSMENU|
   WS_MINIMIZEBOX|WS_MAXIMIZEBOX|WS_THICKFRAME|WS_CLIPCHILDREN|WS_HSCROLL|WS_VSCROLL;
 static constexpr int DETAIL_SHIFT=105;
@@ -59,18 +89,54 @@ static constexpr int VISIBLE_TABS=9;
 static int firstVisibleTab=0;
 static int scrollX=0,scrollY=0;
 static bool layingOut=false;
+static bool resizingWindow=false,resizePending=false;
 static int extraWidth(){
   RECT area{};if(win)GetClientRect(win,&area);
-  return currentPage==1?0:(int)area.right-BASE_WIDTH;
+  int extra=(int)area.right-BASE_WIDTH;
+  return currentPage==1?std::max(0,extra):extra;
 }
 static int extraHeight(){
   RECT area{};if(win)GetClientRect(win,&area);
-  return currentPage==1?0:(int)area.bottom-BASE_HEIGHT;
+  return currentPage==1?std::max(0,(int)area.bottom-DETAIL_LAYOUT_HEIGHT):
+                        (int)area.bottom-BASE_HEIGHT;
+}
+static int detailLeftGrowth(){return extraWidth()/2;}
+static int detailRightGrowth(){return extraWidth()-detailLeftGrowth();}
+static int preferenceCellWidth(int extra){return 82+extra/8;}
+static int preferenceCellX(int column,int extra){
+  int growth=extra/8;
+  return 745+column*100+column*growth+column*(extra-4*growth)/3;
+}
+static void detailControlBounds(HWND item,int baseX,int baseY,int baseW,int baseH,
+                                int& x,int& y,int& w,int& h){
+  x=baseX;y=baseY;w=baseW;h=baseH;
+  int left=detailLeftGrowth(),right=detailRightGrowth();
+  if(baseX>=648){
+    x+=left;
+    for(int i=0;i<4;i++)for(int j=0;j<5;j++)if(item==rates[i][j]){
+      x=left+preferenceCellX(i,right);
+      w=preferenceCellWidth(right);
+    }
+  }else{
+    if(item==nameEdit||item==riskText)w+=left/2;
+    if(item==abnoLabel||item==capLabel)x+=left/2;
+    if(item==abnoBox||item==capBox){x+=left/2;w+=left/2;}
+    for(int i=0;i<4;i++){
+      if(item==attributeHeaders[i])x+=i*left/4;
+      if(item==stats[i]){x+=left/4;w+=left/8;}
+      if(item==targets[i]){x+=left/2;w+=left/8;}
+      if(item==done[i]){x+=3*left/4;w+=left/8;}
+      if(item==doneMinus[i]||item==donePlus[i])x+=left;
+    }
+    if(item==residentLabel||item==residentBox)x+=left/2;
+    if(item==clerksLabel||item==clerksBox)x+=left;
+  }
+  if(baseY>=547)y+=extraHeight();
 }
 static HFONT bodyFont,smallFont,titleFont,sectionFont,emphasisFont,headerFont;
 static HFONT currentBodyFont(){return bodyFont;}
 static HFONT currentHeaderFont(){return headerFont;}
-static HBRUSH cardBrush,editBrush,riskBrush;
+static HBRUSH cardBrush,editBrush;
 static std::wstring iniPath,summary,detail;
 static PlanInput viewPlan;
 static WorkResult viewResults[4];
@@ -375,6 +441,7 @@ static void updateSimpleRow(int index){
 }
 static void rebuildSimpleList(){
   if(!simpleList)return;
+  hoveredSimpleRow=-1;
   ListView_DeleteAllItems(simpleList);
   for(int i=0;i<(int)employees.size();i++){
     LVITEMW item{};item.mask=LVIF_TEXT;item.iItem=i;
@@ -450,7 +517,11 @@ static void paintControlFrames(HDC dc){
   HGDIOBJ oldBrush=SelectObject(dc,GetStockObject(NULL_BRUSH));
   for(const auto& frame:controlFrames)if(frame.page==currentPage){
     RECT area{};
-    if(currentPage==1)area={frame.x,frame.y,frame.x+frame.w,frame.y+frame.h};
+    if(currentPage==1){
+      int x,y,w,h;
+      detailControlBounds(frame.item,frame.x,frame.y,frame.w,frame.h,x,y,w,h);
+      area={x,y,x+w,y+h};
+    }
     else{
       GetWindowRect(frame.item,&area);
       MapWindowPoints(HWND_DESKTOP,win,(POINT*)&area,2);
@@ -507,72 +578,110 @@ static void paintHeader(HDC dc,const wchar_t* title,int page){
   draw(dc,L"LOBOTOMY CORPORATION   /   TRAINING PLANNER",47,49,
        std::min(670,width-260),18,smallFont,RGB(177,190,188));
   rounded(dc,1010+extraWidth(),21,155,34,PANEL,PANEL);
-  draw(dc,page==1?L"●  自动保存":L"●  离线工作台",1018+extraWidth(),21,139,34,smallFont,RGB(190,224,205),DT_CENTER);
+  draw(dc,updateDownloading?L"●  正在下载更新":
+          updateReady?L"●  更新待安装":
+          page==1?L"●  自动保存":L"●  离线工作台",
+       1018+extraWidth(),21,139,34,smallFont,RGB(190,224,205),DT_CENTER);
 }
 static void paintResults(HDC dc){
   COLORREF accent=trainingComplete?GREEN:RED;
-  rounded(dc,670,546,486+extraWidth(),66,trainingComplete?SOFT_GREEN:SOFT_RED);
-  fill(dc,670,558,4,42,accent);
+  int dw=detailRightGrowth(),dy=extraHeight();
+  rounded(dc,670,546+dy,486+dw,66,trainingComplete?SOFT_GREEN:SOFT_RED);
+  fill(dc,670,558+dy,4,42,accent);
   if(best>=0){
     const wchar_t* prefix=L"推荐工作  ·  ";
     HGDIOBJ oldFont=SelectObject(dc,emphasisFont);
     SIZE size{};GetTextExtentPoint32W(dc,prefix,(int)wcslen(prefix),&size);
     SelectObject(dc,oldFont);
-    draw(dc,prefix,688,550,size.cx+2,31,emphasisFont,accent);
-    draw(dc,works[best],688+size.cx,550,450-size.cx,31,emphasisFont,WORK_COLORS[best]);
-  }else draw(dc,summary,688,550,450,31,emphasisFont,accent);
-  draw(dc,detail,688,582,450,22,smallFont,INK);
+    draw(dc,prefix,688,550+dy,size.cx+2,31,emphasisFont,accent);
+    draw(dc,works[best],688+size.cx,550+dy,450+dw-size.cx,31,emphasisFont,WORK_COLORS[best]);
+  }else draw(dc,summary,688,550+dy,450+dw,31,emphasisFont,accent);
+  draw(dc,detail,688,582+dy,450+dw,22,smallFont,INK);
   if(!CATALOG[selected].regularWork){
-    draw(dc,L"请选择可进行常规工作的异想体。",674,650,475,32,bodyFont,MUTED);
+    draw(dc,L"请选择可进行常规工作的异想体。",674,650+dy,475+dw,32,bodyFont,MUTED);
     return;
   }
-  draw(dc,L"工作",674,617,65,22,smallFont,MUTED);
-  draw(dc,L"属性",751,617,60,22,smallFont,MUTED);
-  draw(dc,L"偏好",816,617,66,22,smallFont,MUTED);
-  draw(dc,L"单次增益",892,617,88,22,smallFont,MUTED);
-  draw(dc,L"计划 / 已做 / 剩余",992,617,163,22,smallFont,MUTED);
+  draw(dc,L"工作",674,617+dy,65,22,smallFont,MUTED);
+  draw(dc,L"属性",751+dw/4,617+dy,60,22,smallFont,MUTED);
+  draw(dc,L"偏好",816+dw/2,617+dy,66,22,smallFont,MUTED);
+  draw(dc,L"单次增益",892+dw*3/4,617+dy,88,22,smallFont,MUTED);
+  draw(dc,L"计划 / 已做 / 剩余",992+dw,617+dy,163,22,smallFont,MUTED);
   for(int i=0;i<4;i++){
-    int y=641+i*22;auto r=viewResults[i];
-    fill(dc,670,y,486+extraWidth(),21,i==best?WORK_BACKGROUNDS[i]:(i%2?CARD:ROW));
+    int y=641+dy+i*22;auto r=viewResults[i];
+    fill(dc,670,y,486+dw,21,i==best?WORK_BACKGROUNDS[i]:(i%2?CARD:ROW));
     if(i==best)fill(dc,670,y,3,21,WORK_COLORS[i]);
     draw(dc,works[i],677,y,60,21,bodyFont,WORK_COLORS[i]);
-    draw(dc,virtues[i],751,y,60,21,bodyFont,WORK_COLORS[i]);
-    draw(dc,r.rate==-101?L"—":std::to_wstring(r.rate)+L"%",816,y,70,21,bodyFont,
+    draw(dc,virtues[i],751+dw/4,y,60,21,bodyFont,WORK_COLORS[i]);
+    draw(dc,r.rate==-101?L"—":std::to_wstring(r.rate)+L"%",816+dw/2,y,70,21,bodyFont,
          r.rate>0?GREEN:MUTED);
-    draw(dc,r.rate==-101?L"—":fmt(r.firstGain),892,y,88,21,bodyFont,INK);
+    draw(dc,r.rate==-101?L"—":fmt(r.firstGain),892+dw*3/4,y,88,21,bodyFont,INK);
     std::wstring count=r.rate==-101?L"—":std::to_wstring(r.count)+L" / "+
                        std::to_wstring(viewPlan.completed[i])+L" / "+std::to_wstring(r.remaining);
-    draw(dc,count,992,y,163,21,bodyFont,INK);
+    draw(dc,count,992+dw,y,163,21,bodyFont,INK);
   }
-  if(viewPlan.level==3)draw(dc,L"WAW 连续工作过载未计入估算。",672,729,482,17,smallFont,MUTED);
+  if(viewPlan.level==3)draw(dc,L"WAW 连续工作过载未计入估算。",672,729+dy,482+dw,17,smallFont,MUTED);
+}
+static void paintQualityTable(HDC dc,int leftGrowth,int dy){
+  const wchar_t* headers[]={L"品质等级",L"I",L"II",L"III",L"IV",L"V",L"EX"};
+  const wchar_t* values[3][7]={
+    {L"判定数值范围",L"1–29",L"30–44",L"45–64",L"65–84",L"85–100",L"100+"},
+    {L"训练需要的 LOB 点数",L"X",L"1",L"2",L"3",L"4",L"6"},
+    {L"训练至该等级可能出现的数值范围",L"20",L"30–37",L"45–55",L"65–75",L"85–92",L"110–130"}
+  };
+  const int x=45,top=713+dy,totalWidth=562+leftGrowth,rowHeight=25;
+  const int labelWidth=217+leftGrowth/4;
+  for(int row=0;row<4;row++){
+    int y=top+row*rowHeight;
+    fill(dc,x,y,totalWidth,rowHeight,row==0?HEADER_BG:(row%2?CARD:ROW));
+    draw(dc,row==0?headers[0]:values[row-1][0],x+8,y,labelWidth-12,rowHeight,
+         smallFont,row==0?INK:MUTED);
+    for(int col=1;col<=6;col++){
+      int left=x+labelWidth+(col-1)*(totalWidth-labelWidth)/6;
+      int right=x+labelWidth+col*(totalWidth-labelWidth)/6;
+      draw(dc,row==0?headers[col]:values[row-1][col],left,y,right-left,rowHeight,
+           row==0?headerFont:smallFont,INK,DT_CENTER);
+      line(dc,left,y+4,left,y+rowHeight-4,BORDER);
+    }
+    line(dc,x,y+rowHeight-1,x+totalWidth,y+rowHeight-1,BORDER);
+  }
 }
 static void paintDetail(HDC dc){
-  RECT whole{0,0,1200+extraWidth(),BASE_HEIGHT+extraHeight()};
+  int leftGrowth=detailLeftGrowth(),rightGrowth=detailRightGrowth(),dy=extraHeight();
+  RECT whole{0,0,1200+extraWidth(),DETAIL_LAYOUT_HEIGHT+dy};
   HBRUSH bg=CreateSolidBrush(BG);FillRect(dc,&whole,bg);DeleteObject(bg);
   paintHeader(dc,L"员工训练计算器",1);
   paintTabPills(dc);
   POINT previous{};GetViewportOrgEx(dc,&previous);
   SetViewportOrgEx(dc,previous.x,previous.y-DETAIL_SHIFT,nullptr);
-  card(dc,22,268,608,481+extraHeight());
-  card(dc,648,268,530+extraWidth(),481+extraHeight());
-  section(dc,L"员工档案",45,282,540);
-  line(dc,46,404,605,404,BORDER);
-  section(dc,L"属性与目标",45,411,540);
-  line(dc,46,631,605,631,BORDER);
-  section(dc,L"训练条件",45,635,540);
+  card(dc,22,268,608+leftGrowth,481+dy);
+  section(dc,L"员工档案",45,282,540+leftGrowth);
+  line(dc,46,404,605+leftGrowth,404,BORDER);
+  section(dc,L"属性与目标",45,411,540+leftGrowth);
+  line(dc,46,631+dy,605+leftGrowth,631+dy,BORDER);
+  section(dc,L"训练条件",45,635+dy,540+leftGrowth);
+  SetViewportOrgEx(dc,previous.x+leftGrowth,previous.y-DETAIL_SHIFT,nullptr);
+  card(dc,648,268,530+rightGrowth,481+dy);
   section(dc,L"工作偏好",671,282,470);
   draw(dc,L"按员工品质 I–V 的基础成功率 %",671,310,470,22,smallFont,MUTED);
   for(int i=0;i<4;i++){
-    int x=745+i*100;
-    rounded(dc,x,337,82,25,WORK_BACKGROUNDS[i],WORK_BACKGROUNDS[i]);
-    draw(dc,works[i],x,337,82,25,bodyFont,WORK_COLORS[i],DT_CENTER);
+    int x=preferenceCellX(i,rightGrowth),w=preferenceCellWidth(rightGrowth);
+    rounded(dc,x,337,w,25,WORK_BACKGROUNDS[i],WORK_BACKGROUNDS[i]);
+    draw(dc,works[i],x,337,w,25,bodyFont,WORK_COLORS[i],DT_CENTER);
   }
-  line(dc,672,514,1154+extraWidth(),514,BORDER);
-  section(dc,L"训练结果",671,519,470);
+  line(dc,672,514+dy,1154+rightGrowth,514+dy,BORDER);
+  section(dc,L"训练结果",671,519+dy,470+rightGrowth);
   SetViewportOrgEx(dc,previous.x,previous.y,nullptr);
-  card(dc,22,674+extraHeight(),1156+extraWidth(),74);
-  section(dc,L"使用提示",45,685+extraHeight(),1080);
-  draw(dc,L"员工切换：上方标签或简单模式双击员工  ·  工作次数：使用 ＋ / − 或直接输入  ·  所有修改自动保存",47,715+extraHeight(),1085,22,smallFont,MUTED);
+  card(dc,22,674+dy,608+leftGrowth,150);
+  section(dc,L"员工品质与属性范围",45,685+dy,540+leftGrowth);
+  paintQualityTable(dc,leftGrowth,dy);
+  SetViewportOrgEx(dc,previous.x+leftGrowth,previous.y,nullptr);
+  card(dc,648,674+dy,530+rightGrowth,150);
+  section(dc,L"使用提示",671,685+dy,470+rightGrowth);
+  draw(dc,L"员工切换：上方标签或简单模式双击员工",672,721+dy,465+rightGrowth,22,smallFont,MUTED);
+  draw(dc,L"工作次数：使用 ＋ / − 或直接输入",672,751+dy,465+rightGrowth,22,smallFont,MUTED);
+  draw(dc,L"所有修改自动保存到程序目录的 LobotomyCorpCal.ini",672,781+dy,
+       465+rightGrowth,22,smallFont,MUTED);
+  SetViewportOrgEx(dc,previous.x,previous.y,nullptr);
 }
 static void paintOtherPage(HDC dc){
   paintHeader(dc,pageNames[currentPage],currentPage);
@@ -582,7 +691,7 @@ static void paintOtherPage(HDC dc){
     L"",
     L"在这里添加或移除当前收容的异想体。员工只能选择已收容对象。",
     L"参考工作簿的原始推荐评级。点击编号、等级或收容推荐的表头可切换排序。",
-    L"按异想体或武器名称搜索，支持汉字、拼音全拼和首字母；上限为 Wiki 列出的基础持有上限。"
+    L"按异想体或 E.G.O 名称搜索，支持汉字、拼音全拼和首字母；上限为 Wiki 列出的基础持有上限。"
   };
   section(dc,pageNames[currentPage],45,106,std::max(250,1090+extraWidth()));
   draw(dc,descriptions[currentPage],46,132,std::max(250,1080+extraWidth()),23,smallFont,MUTED);
@@ -617,7 +726,8 @@ static void paint(HDC dc){
     paintDetail(dc);
     if(ready){
       POINT detailOrigin{};GetViewportOrgEx(dc,&detailOrigin);
-      SetViewportOrgEx(dc,detailOrigin.x,detailOrigin.y-DETAIL_SHIFT,nullptr);
+      SetViewportOrgEx(dc,detailOrigin.x+detailLeftGrowth(),
+                         detailOrigin.y-DETAIL_SHIFT,nullptr);
       paintResults(dc);
       SetViewportOrgEx(dc,detailOrigin.x,detailOrigin.y,nullptr);
     }
@@ -699,6 +809,190 @@ static LRESULT paintTableHeader(const NMHDR* notice){
   }
   return CDRF_DODEFAULT;
 }
+static LRESULT paintContainedRow(const NMLVCUSTOMDRAW* custom){
+  int row=(int)custom->nmcd.dwItemSpec;
+  LVITEMW item{};item.mask=LVIF_PARAM;item.iItem=row;
+  if(!ListView_GetItem(containedList,&item)||item.lParam<0||item.lParam>=CATALOG_SIZE)
+    return CDRF_DODEFAULT;
+  int level=CATALOG[item.lParam].level;
+  RECT rowRect{},client{},nameRect{},levelRect{};
+  if(!ListView_GetItemRect(containedList,row,&rowRect,LVIR_BOUNDS)||
+     !ListView_GetSubItemRect(containedList,row,0,LVIR_LABEL,&nameRect)||
+     !ListView_GetSubItemRect(containedList,row,1,LVIR_BOUNDS,&levelRect))
+    return CDRF_DODEFAULT;
+  GetClientRect(containedList,&client);
+  COLORREF accent=RISK_COLORS[level];
+  COLORREF foreground=level==2?RGB(128,105,0):accent;
+  bool selected=(ListView_GetItemState(containedList,row,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+  bool hovered=row==hoveredContainedRow;
+  int tint=selected?30:(hovered?22:14);
+  auto lighten=[tint](BYTE component){return (component*tint+255*(100-tint))/100;};
+  COLORREF background=RGB(lighten(GetRValue(accent)),lighten(GetGValue(accent)),
+                          lighten(GetBValue(accent)));
+  int height=rowRect.bottom-rowRect.top;
+  fill(custom->nmcd.hdc,0,rowRect.top,client.right,height,CARD);
+  int pillLeft=std::max(6,(int)rowRect.left+6);
+  int pillRight=std::min((int)client.right-6,
+                         std::max((int)rowRect.right,(int)levelRect.right)-6);
+  rounded(custom->nmcd.hdc,pillLeft,rowRect.top+2,std::max(0,pillRight-pillLeft),
+          std::max(0,height-4),background,background);
+  if(selected)fill(custom->nmcd.hdc,pillLeft+3,rowRect.top+5,3,
+                   std::max(0,height-10),foreground);
+  std::wstring name=std::wstring(CATALOG[item.lParam].id)+L"  "+CATALOG[item.lParam].name;
+  draw(custom->nmcd.hdc,name,nameRect.left+14,rowRect.top+2,
+       std::max(0,(int)(levelRect.left-nameRect.left-20)),height-4,
+       bodyFont,foreground);
+  draw(custom->nmcd.hdc,levels[level],levelRect.left+10,rowRect.top+2,
+       std::max(0,(int)(levelRect.right-levelRect.left-18)),height-4,
+       bodyFont,foreground);
+  return CDRF_SKIPDEFAULT;
+}
+static LRESULT paintSimpleRow(const NMLVCUSTOMDRAW* custom){
+  int row=(int)custom->nmcd.dwItemSpec;
+  if(row<0||row>=(int)employees.size())return CDRF_DODEFAULT;
+  int level=std::clamp(agentLevel(employees[row].current),1,5)-1;
+  RECT rowRect{},client{},cells[5]{};
+  if(!ListView_GetItemRect(simpleList,row,&rowRect,LVIR_BOUNDS)||
+     !ListView_GetSubItemRect(simpleList,row,0,LVIR_LABEL,&cells[0]))
+    return CDRF_DODEFAULT;
+  for(int column=1;column<5;column++)
+    if(!ListView_GetSubItemRect(simpleList,row,column,LVIR_BOUNDS,&cells[column]))
+      return CDRF_DODEFAULT;
+  GetClientRect(simpleList,&client);
+  COLORREF accent=RISK_COLORS[level];
+  COLORREF foreground=level==2?RGB(128,105,0):accent;
+  bool selected=(ListView_GetItemState(simpleList,row,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+  int tint=selected?30:(row==hoveredSimpleRow?22:14);
+  auto lighten=[tint](BYTE component){return (component*tint+255*(100-tint))/100;};
+  COLORREF background=RGB(lighten(GetRValue(accent)),lighten(GetGValue(accent)),
+                          lighten(GetBValue(accent)));
+  int height=rowRect.bottom-rowRect.top;
+  fill(custom->nmcd.hdc,0,rowRect.top,client.right,height,CARD);
+  int pillLeft=std::max(6,(int)rowRect.left+6);
+  int pillRight=std::min((int)client.right-6,
+                         std::max((int)rowRect.right,(int)cells[4].right)-6);
+  rounded(custom->nmcd.hdc,pillLeft,rowRect.top+2,std::max(0,pillRight-pillLeft),
+          std::max(0,height-4),background,background);
+  if(selected)fill(custom->nmcd.hdc,pillLeft+3,rowRect.top+5,3,
+                   std::max(0,height-10),foreground);
+  for(int column=0;column<5;column++){
+    wchar_t value[256]{};
+    ListView_GetItemText(simpleList,row,column,value,256);
+    int left=cells[column].left+12;
+    int right=cells[column].right-10;
+    draw(custom->nmcd.hdc,value,left,rowRect.top+2,std::max(0,right-left),height-4,
+         bodyFont,foreground);
+  }
+  return CDRF_SKIPDEFAULT;
+}
+static LRESULT paintEgoRow(const NMLVCUSTOMDRAW* custom){
+  int row=(int)custom->nmcd.dwItemSpec;
+  if(row<0||row>=(int)egoOrder.size())return CDRF_DODEFAULT;
+  int level=CATALOG[egoOrder[row]].level;
+  RECT rowRect{},client{},cells[9]{};
+  if(!ListView_GetItemRect(egoList,row,&rowRect,LVIR_BOUNDS)||
+     !ListView_GetSubItemRect(egoList,row,0,LVIR_LABEL,&cells[0]))
+    return CDRF_DODEFAULT;
+  for(int column=1;column<9;column++)
+    if(!ListView_GetSubItemRect(egoList,row,column,LVIR_BOUNDS,&cells[column]))
+      return CDRF_DODEFAULT;
+  GetClientRect(egoList,&client);
+  COLORREF accent=RISK_COLORS[level];
+  COLORREF foreground=level==2?RGB(128,105,0):accent;
+  bool selected=(ListView_GetItemState(egoList,row,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+  int tint=selected?30:(row==hoveredEgoRow?22:14);
+  auto lighten=[tint](BYTE component){return (component*tint+255*(100-tint))/100;};
+  COLORREF background=RGB(lighten(GetRValue(accent)),lighten(GetGValue(accent)),
+                          lighten(GetBValue(accent)));
+  int height=rowRect.bottom-rowRect.top;
+  fill(custom->nmcd.hdc,0,rowRect.top,client.right,height,CARD);
+  int pillLeft=std::max(6,(int)rowRect.left+6);
+  int pillRight=std::min((int)client.right-6,
+                         std::max((int)rowRect.right,(int)cells[8].right)-6);
+  rounded(custom->nmcd.hdc,pillLeft,rowRect.top+2,std::max(0,pillRight-pillLeft),
+          std::max(0,height-4),background,background);
+  if(selected)fill(custom->nmcd.hdc,pillLeft+3,rowRect.top+5,3,
+                   std::max(0,height-10),foreground);
+  for(int column=0;column<9;column++){
+    wchar_t value[256]{};
+    ListView_GetItemText(egoList,row,column,value,256);
+    int left=cells[column].left+10;
+    int right=cells[column].right-8;
+    draw(custom->nmcd.hdc,value,left,rowRect.top+2,std::max(0,right-left),height-4,
+         bodyFont,foreground);
+  }
+  return CDRF_SKIPDEFAULT;
+}
+static LRESULT paintRecommendationRow(const NMLVCUSTOMDRAW* custom){
+  int row=(int)custom->nmcd.dwItemSpec;
+  if(row<0||row>=(int)recommendationOrder.size())return CDRF_DODEFAULT;
+  int level=CATALOG[recommendationOrder[row]].level;
+  RECT rowRect{},client{},cells[7]{};
+  if(!ListView_GetItemRect(recommendationList,row,&rowRect,LVIR_BOUNDS)||
+     !ListView_GetSubItemRect(recommendationList,row,0,LVIR_LABEL,&cells[0]))
+    return CDRF_DODEFAULT;
+  for(int column=1;column<7;column++)
+    if(!ListView_GetSubItemRect(recommendationList,row,column,LVIR_BOUNDS,&cells[column]))
+      return CDRF_DODEFAULT;
+  GetClientRect(recommendationList,&client);
+  COLORREF accent=RISK_COLORS[level];
+  COLORREF foreground=level==2?RGB(128,105,0):accent;
+  bool selected=(ListView_GetItemState(recommendationList,row,LVIS_SELECTED)&LVIS_SELECTED)!=0;
+  int tint=selected?30:(row==hoveredRecommendationRow?22:14);
+  auto lighten=[tint](BYTE component){return (component*tint+255*(100-tint))/100;};
+  COLORREF background=RGB(lighten(GetRValue(accent)),lighten(GetGValue(accent)),
+                          lighten(GetBValue(accent)));
+  int height=rowRect.bottom-rowRect.top;
+  fill(custom->nmcd.hdc,0,rowRect.top,client.right,height,CARD);
+  int pillLeft=std::max(6,(int)rowRect.left+6);
+  int pillRight=std::min((int)client.right-6,
+                         std::max((int)rowRect.right,(int)cells[6].right)-6);
+  rounded(custom->nmcd.hdc,pillLeft,rowRect.top+2,std::max(0,pillRight-pillLeft),
+          std::max(0,height-4),background,background);
+  if(selected)fill(custom->nmcd.hdc,pillLeft+3,rowRect.top+5,3,
+                   std::max(0,height-10),foreground);
+  for(int column=0;column<7;column++){
+    wchar_t value[512]{};
+    ListView_GetItemText(recommendationList,row,column,value,512);
+    int left=cells[column].left+10;
+    int right=cells[column].right-8;
+    draw(custom->nmcd.hdc,value,left,rowRect.top+2,std::max(0,right-left),height-4,
+         bodyFont,foreground);
+  }
+  return CDRF_SKIPDEFAULT;
+}
+static LRESULT CALLBACK coloredListSubclass(HWND list,UINT message,WPARAM wp,LPARAM lp,
+                                            UINT_PTR,DWORD_PTR){
+  int& hovered=list==simpleList?hoveredSimpleRow:
+               list==containedList?hoveredContainedRow:
+               list==recommendationList?hoveredRecommendationRow:hoveredEgoRow;
+  bool& tracking=list==simpleList?trackingSimpleMouse:
+                 list==containedList?trackingContainedMouse:
+                 list==recommendationList?trackingRecommendationMouse:trackingEgoMouse;
+  if(message==WM_MOUSEMOVE){
+    if(!tracking){
+      TRACKMOUSEEVENT event{sizeof(TRACKMOUSEEVENT),TME_LEAVE,list,0};
+      tracking=TrackMouseEvent(&event)!=FALSE;
+    }
+    LVHITTESTINFO hit{};
+    hit.pt={(short)LOWORD(lp),(short)HIWORD(lp)};
+    int row=ListView_HitTest(list,&hit);
+    if(row!=hovered){
+      int previous=hovered;
+      hovered=row;
+      if(previous>=0)ListView_RedrawItems(list,previous,previous);
+      if(row>=0)ListView_RedrawItems(list,row,row);
+    }
+  }else if(message==WM_MOUSELEAVE){
+    tracking=false;
+    int previous=hovered;
+    hovered=-1;
+    if(previous>=0)ListView_RedrawItems(list,previous,previous);
+  }else if(message==WM_NCDESTROY){
+    RemoveWindowSubclass(list,coloredListSubclass,1);
+  }
+  return DefSubclassProc(list,message,wp,lp);
+}
 static void addColumn(HWND list,int index,const wchar_t* heading,int width){
   LVCOLUMNW column{};column.mask=LVCF_TEXT|LVCF_WIDTH|LVCF_SUBITEM;
   column.pszText=const_cast<wchar_t*>(heading);column.cx=width;column.iSubItem=index;
@@ -723,6 +1017,7 @@ static void rebuildWorkChoices(){
 }
 static void rebuildContainedLists(){
   if(!containedList||!availableCombo)return;
+  hoveredContainedRow=-1;
   ListView_DeleteAllItems(containedList);
   SendMessageW(availableCombo,CB_RESETCONTENT,0,0);
   int row=0;
@@ -745,6 +1040,14 @@ static std::wstring oneLine(const wchar_t* value){
   std::wstring result=value;
   for(auto& ch:result)if(ch==L'\n'||ch==L'\r')ch=L' ';
   return result.empty()?L"—":result;
+}
+static std::wstring egoRecommendationText(const Abnormality& abnormality,bool weapon,bool tooltip){
+  if(weapon?abnormality.egoWeaponMax==0:abnormality.egoSuitMax==0)return L"—";
+  const wchar_t* source=weapon?abnormality.weaponRecommendation:
+                               abnormality.suitRecommendation;
+  if(wcscmp(abnormality.id,L"T-03-46")==0)
+    return tooltip?std::wstring(source):oneLine(source);
+  return summarizeEgoRecommendation(source);
 }
 static void showRecommendationDetail(int index){
   if(index<0||index>=CATALOG_SIZE)return;
@@ -786,6 +1089,7 @@ static void rebuildRecommendationList(){
   int selectedRow=ListView_GetNextItem(recommendationList,-1,LVNI_SELECTED);
   if(selectedRow>=0&&selectedRow<(int)recommendationOrder.size())
     selectedCatalog=recommendationOrder[selectedRow];
+  hoveredRecommendationRow=-1;
   recommendationOrder.clear();
   for(int i=0;i<CATALOG_SIZE;i++)recommendationOrder.push_back(i);
   std::stable_sort(recommendationOrder.begin(),recommendationOrder.end(),[](int left,int right){
@@ -829,13 +1133,16 @@ static void updateEgoRow(int index){
   auto weapon=a.egoWeaponMax?std::to_wstring(egoWeapons[index])+L" / "+std::to_wstring(a.egoWeaponMax):L"—";
   auto suit=a.egoSuitMax?std::to_wstring(egoSuits[index])+L" / "+std::to_wstring(a.egoSuitMax):L"—";
   const wchar_t* status=egoWeapons[index]||egoSuits[index]?L"已解锁":L"未解锁";
-  auto weaponName=std::wstring(a.egoWeaponMax?a.egoWeaponName:L"—");
-  auto suitName=std::wstring(a.egoSuitMax?a.egoSuitName:L"—");
-  ListView_SetItemText(egoList,row,2,weaponName.data());
-  ListView_SetItemText(egoList,row,3,weapon.data());
-  ListView_SetItemText(egoList,row,4,suitName.data());
-  ListView_SetItemText(egoList,row,5,suit.data());
-  ListView_SetItemText(egoList,row,6,const_cast<wchar_t*>(status));
+  auto egoName=std::wstring(a.egoWeaponMax?a.egoWeaponName:a.egoSuitName);
+  auto weaponRecommendation=egoRecommendationText(a,true,false);
+  auto suitRecommendation=egoRecommendationText(a,false,false);
+  ListView_SetItemText(egoList,row,2,const_cast<wchar_t*>(levels[a.level]));
+  ListView_SetItemText(egoList,row,3,egoName.data());
+  ListView_SetItemText(egoList,row,4,weapon.data());
+  ListView_SetItemText(egoList,row,5,weaponRecommendation.data());
+  ListView_SetItemText(egoList,row,6,suit.data());
+  ListView_SetItemText(egoList,row,7,suitRecommendation.data());
+  ListView_SetItemText(egoList,row,8,const_cast<wchar_t*>(status));
 }
 static int selectedEgoIndex(){
   int row=ListView_GetNextItem(egoList,-1,LVNI_SELECTED);
@@ -851,16 +1158,18 @@ static void updateEgoButtons(){
 }
 static void markEgoSort(){
   HWND header=ListView_GetHeader(egoList);
-  HDITEMW item{};item.mask=HDI_FORMAT;
-  if(Header_GetItem(header,0,&item)){
+  for(int column:{0,2}){
+    HDITEMW item{};item.mask=HDI_FORMAT;
+    if(!Header_GetItem(header,column,&item))continue;
     item.fmt&=~(HDF_SORTUP|HDF_SORTDOWN);
-    item.fmt|=egoIdDescending?HDF_SORTDOWN:HDF_SORTUP;
-    Header_SetItem(header,0,&item);
+    if(column==egoSortColumn)item.fmt|=egoSortDescending?HDF_SORTDOWN:HDF_SORTUP;
+    Header_SetItem(header,column,&item);
   }
 }
 static void rebuildEgoList(){
   int previouslySelected=selectedEgoIndex();
   bool wasReady=ready;ready=false;
+  hoveredEgoRow=-1;
   ListView_DeleteAllItems(egoList);
   egoOrder.clear();
   const auto query=getText(egoSearch);
@@ -876,10 +1185,14 @@ static void rebuildEgoList(){
     bool leftUnlocked=egoWeapons[left]>0||egoSuits[left]>0;
     bool rightUnlocked=egoWeapons[right]>0||egoSuits[right]>0;
     if(leftUnlocked!=rightUnlocked)return leftUnlocked;
+    if(egoSortColumn==2&&CATALOG[left].level!=CATALOG[right].level)
+      return egoSortDescending?CATALOG[left].level>CATALOG[right].level:
+                               CATALOG[left].level<CATALOG[right].level;
     int leftNumber=lastIdNumber(CATALOG[left].id);
     int rightNumber=lastIdNumber(CATALOG[right].id);
     if(leftNumber!=rightNumber)
-      return egoIdDescending?leftNumber>rightNumber:leftNumber<rightNumber;
+      return egoSortColumn==0&&egoSortDescending?leftNumber>rightNumber:
+                                                  leftNumber<rightNumber;
     return false;
   });
   for(int row=0;row<(int)egoOrder.size();row++){
@@ -947,21 +1260,22 @@ static void initialize(){
   emphasisFont=CreateFontW(-22,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
   headerFont=CreateFontW(-15,0,0,0,FW_SEMIBOLD,FALSE,FALSE,FALSE,DEFAULT_CHARSET,0,0,CLEARTYPE_QUALITY,0,L"Microsoft YaHei UI");
   cardBrush=CreateSolidBrush(CARD);editBrush=CreateSolidBrush(FIELD);
-  riskBrush=CreateSolidBrush(DARK);
   tabs=CreateWindowExW(0,WC_TABCONTROLW,L"",WS_CHILD|TCS_SINGLELINE,
                        0,0,1,1,win,(HMENU)(INT_PTR)601,GetModuleHandleW(nullptr),nullptr);
   label(L"员工姓名",47,312,195);nameEdit=edit(47,338,221,101);
-  label(L"工作异想体",286,312,322);
+  abnoLabel=label(L"工作异想体",286,312,322);
   abnoBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL,286,338,319,300,102);
   label(L"危险等级",47,375,100);
   riskText=control(L"STATIC",L"",SS_CENTER,153,374,115,28);
   SendMessageW(riskText,WM_SETFONT,(WPARAM)sectionFont,TRUE);
-  label(L"属性上限",286,375,100);
+  capLabel=label(L"属性上限",286,375,100);
   capBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST,389,373,216,120,146);
   for(const wchar_t* value:{L"100  常规",L"120  记录部研究",L"130  核心抑制"})
     SendMessageW(capBox,CB_ADDSTRING,0,(LPARAM)value);
-  label(L"属性",48,444,90);label(L"当前",160,444,90);
-  label(L"目标",274,444,90);label(L"已完成",402,444,110);
+  attributeHeaders[0]=label(L"属性",48,444,90);
+  attributeHeaders[1]=label(L"当前",160,444,90);
+  attributeHeaders[2]=label(L"目标",274,444,90);
+  attributeHeaders[3]=label(L"已完成",402,444,110);
   for(int i=0;i<4;i++){
     int y=470+i*38;
     virtueLabels[i]=label(virtues[i],48,y+4,88,25);
@@ -972,8 +1286,10 @@ static void initialize(){
     donePlus[i]=control(L"BUTTON",L"+",BS_PUSHBUTTON,523,y,30,29,401+i*2);
   }
   techBox=control(L"BUTTON",L"普及培训手册  +0.5",BS_AUTOCHECKBOX,47,673,235,27,140);
-  label(L"培训部常驻",303,652,135);residentBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST,303,676,125,110,141);
-  label(L"文职加成",447,652,130);clerksBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST,447,676,125,110,142);
+  residentLabel=label(L"培训部常驻",303,652,135);
+  residentBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST,303,676,125,110,141);
+  clerksLabel=label(L"文职加成",447,652,130);
+  clerksBox=control(L"COMBOBOX",L"",CBS_DROPDOWNLIST,447,676,125,110,142);
   for(const wchar_t* value:{L"无",L"1级",L"2级",L"3级"}){
     SendMessageW(residentBox,CB_ADDSTRING,0,(LPARAM)value);
     SendMessageW(clerksBox,CB_ADDSTRING,0,(LPARAM)value);
@@ -982,13 +1298,14 @@ static void initialize(){
     std::wstring text=L"品质 "+std::to_wstring(j+1);
     label(text.c_str(),672,369+j*29,66,26);
     for(int i=0;i<4;i++)
-      rates[i][j]=control(L"EDIT",L"",WS_BORDER|ES_AUTOHSCROLL,
+      rates[i][j]=control(L"EDIT",L"",WS_BORDER|ES_AUTOHSCROLL|ES_CENTER,
                           745+i*100,369+j*29,82,26,200+i*5+j);
   }
   pageControl(0,L"BUTTON",L"＋ 新增员工",BS_PUSHBUTTON,1000,103,155,29,500);
   simpleList=pageControl(0,WC_LISTVIEWW,L"",WS_BORDER|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,
                          46,172,1110,550,610);
   ListView_SetExtendedListViewStyle(simpleList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
+  SetWindowSubclass(simpleList,coloredListSubclass,1,0);
   const wchar_t* simpleHeaders[]={L"员工",L"等级",L"工作对象",L"推荐工作类型",L"已完成总数"};
   const int simpleWidths[]={230,95,390,220,160};
   for(int i=0;i<5;i++)addColumn(simpleList,i,simpleHeaders[i],simpleWidths[i]);
@@ -999,11 +1316,13 @@ static void initialize(){
   containedList=pageControl(2,WC_LISTVIEWW,L"",WS_BORDER|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,
                             46,239,1110,482,703);
   ListView_SetExtendedListViewStyle(containedList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
+  SetWindowSubclass(containedList,coloredListSubclass,1,0);
   addColumn(containedList,0,L"已收容异想体",850);addColumn(containedList,1,L"危险等级",180);
 
   recommendationList=pageControl(3,WC_LISTVIEWW,L"",WS_BORDER|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,
                                   46,166,1110,389,720);
   ListView_SetExtendedListViewStyle(recommendationList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
+  SetWindowSubclass(recommendationList,coloredListSubclass,1,0);
   const wchar_t* recommendationHeaders[]={L"编号",L"异想体",L"等级",L"收容推荐",L"武器推荐",L"防具推荐",L"镇压"};
   const int recommendationWidths[]={110,166,82,150,245,225,125};
   for(int i=0;i<7;i++)addColumn(recommendationList,i,recommendationHeaders[i],recommendationWidths[i]);
@@ -1012,16 +1331,18 @@ static void initialize(){
 
   pageControl(4,L"STATIC",L"搜索",0,46,169,56,26);
   egoSearch=pageControl(4,L"EDIT",L"",WS_BORDER|ES_AUTOHSCROLL,105,166,545,29,740);
-  SendMessageW(egoSearch,EM_SETCUEBANNER,TRUE,(LPARAM)L"异想体或武器名称 / 拼音 / 首字母");
+  SendMessageW(egoSearch,EM_SETCUEBANNER,TRUE,(LPARAM)L"异想体或 E.G.O 名称 / 拼音 / 首字母");
   pageControl(4,L"BUTTON",L"清除",BS_PUSHBUTTON,664,166,78,29,741);
   egoSearchCount=pageControl(4,L"STATIC",L"",SS_RIGHT,925,169,228,26);
   egoList=pageControl(4,WC_LISTVIEWW,L"",WS_BORDER|LVS_REPORT|LVS_SINGLESEL|LVS_SHOWSELALWAYS,
                       46,211,1110,450,730);
-  ListView_SetExtendedListViewStyle(egoList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
-  const wchar_t* egoHeaders[]={L"编号",L"异想体",L"武器名称",L"已有 / 上限",L"防具名称",L"已有 / 上限",L"状态"};
-  const int egoWidths[]={105,245,185,135,185,135,100};
-  for(int i=0;i<7;i++)addColumn(egoList,i,egoHeaders[i],egoWidths[i]);
-  const wchar_t* egoButtonTexts[]={L"武器 −",L"武器 +",L"防具 −",L"防具 +"};
+  ListView_SetExtendedListViewStyle(egoList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER|LVS_EX_INFOTIP);
+  SetWindowSubclass(egoList,coloredListSubclass,1,0);
+  const wchar_t* egoHeaders[]={L"编号",L"异想体",L"危险等级",L"E.G.O 名称",L"武器数量",
+                              L"武器推荐度",L"装备数量",L"装备推荐度",L"状态"};
+  const int egoWidths[]={90,150,75,150,95,165,95,165,95};
+  for(int i=0;i<9;i++)addColumn(egoList,i,egoHeaders[i],egoWidths[i]);
+  const wchar_t* egoButtonTexts[]={L"武器 −",L"武器 +",L"装备 −",L"装备 +"};
   for(int i=0;i<4;i++)egoButtons[i]=pageControl(4,L"BUTTON",egoButtonTexts[i],BS_PUSHBUTTON,
                                                   46+i*150,680,135,32,710+i);
 
@@ -1065,10 +1386,13 @@ static void layoutControls(){
     GetScrollInfo(win,SB_VERT,&position);scrollY=position.nPos;
   }else scrollX=scrollY=0;
   int dw=extraWidth(),dh=extraHeight();
-  for(const auto& layout:controlLayouts){
+  RECT client{};GetClientRect(win,&client);
+  for(auto& layout:controlLayouts){
+    if(layout.page!=currentPage)continue;
     int x=SIDEBAR_WIDTH+layout.x,y=layout.y,w=layout.w,h=layout.h;
     if(layout.page==1){
-      x-=scrollX;y-=scrollY;
+      detailControlBounds(layout.item,layout.x,layout.y,layout.w,layout.h,x,y,w,h);
+      x+=SIDEBAR_WIDTH-scrollX;y-=scrollY;
     }else{
       if(layout.item==simpleList||layout.item==containedList||
          layout.item==recommendationList||layout.item==egoList)w+=dw;
@@ -1084,16 +1408,74 @@ static void layoutControls(){
       if(layout.item==egoSearch)w=std::max(230,w+dw);
       if(layout.id==741)x=SIDEBAR_WIDTH+105+std::max(230,545+dw)+15;
     }
-    SetWindowPos(layout.item,nullptr,x,y,w,h,SWP_NOZORDER|SWP_NOACTIVATE);
-    if(layout.page==1)clipDetailControl(layout.item,layout.framed,layout.list?16:12);
-    else if(layout.framed)roundControl(layout.item,layout.list?16:12);
-    if(layout.list)roundControl(ListView_GetHeader(layout.item),12);
+    const bool resized=!layout.placed||layout.lastW!=w||layout.lastH!=h;
+    const bool moved=resized||layout.lastX!=x||layout.lastY!=y;
+    if(moved&&!SetWindowPos(layout.item,nullptr,x,y,w,h,
+                            SWP_NOZORDER|SWP_NOACTIVATE))continue;
+    if(layout.page==1){
+      const int left=std::clamp(SIDEBAR_WIDTH-x,0,w);
+      const int top=std::clamp(-y,0,h);
+      const int right=std::clamp((int)client.right-x,left,w);
+      const int bottom=std::clamp((int)client.bottom-y,top,h);
+      if(!layout.placed||resized||layout.clipLeft!=left||layout.clipTop!=top||
+         layout.clipRight!=right||layout.clipBottom!=bottom){
+        clipDetailControl(layout.item,layout.framed,layout.list?16:12);
+        layout.clipLeft=left;layout.clipTop=top;
+        layout.clipRight=right;layout.clipBottom=bottom;
+      }
+    }else if(layout.framed&&resized)roundControl(layout.item,layout.list?16:12);
+    if(layout.list&&resized)roundControl(ListView_GetHeader(layout.item),12);
+    layout.lastX=x;layout.lastY=y;layout.lastW=w;layout.lastH=h;
+    layout.placed=true;
   }
   layingOut=false;
 }
 static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
   switch(message){
-    case WM_CREATE:win=h;initialize();return 0;
+    case WM_CREATE:
+      win=h;initialize();SetTimer(h,991,2000,nullptr);return 0;
+    case WM_TIMER:
+      if(wp==991){
+        if(!updateDownloading&&!updateReady)cleanupUpdateFiles(programPath);
+        if(++updateCleanupTicks>=5)KillTimer(h,991);
+        return 0;
+      }
+      break;
+    case WM_UPDATE_FOUND:{
+      std::unique_ptr<ReleaseInfo> release((ReleaseInfo*)lp);
+      if(!release)return 0;
+      std::wstring prompt=L"发现新版本 "+release->tag+L"（当前 v"+APP_VERSION+
+                          L"）。\n\n现在下载更新吗？\n下载失败时会自动尝试国内镜像。";
+      if(MessageBoxW(h,prompt.c_str(),L"发现更新",MB_YESNO|MB_ICONINFORMATION)==IDYES){
+        updateDownloading=true;InvalidateRect(h,nullptr,FALSE);
+        ReleaseInfo chosen=*release;
+        try{
+          std::thread([h,chosen]{
+            auto* result=new UpdateDownloadResult{};
+            try{result->success=downloadUpdate(chosen,programPath,result->error);}
+            catch(...){result->error=L"下载更新时发生错误。";}
+            if(!PostMessageW(h,WM_UPDATE_DOWNLOADED,0,(LPARAM)result))delete result;
+          }).detach();
+        }catch(...){
+          updateDownloading=false;InvalidateRect(h,nullptr,FALSE);
+          MessageBoxW(h,L"无法启动下载任务。",L"更新失败",MB_OK|MB_ICONERROR);
+        }
+      }
+      return 0;
+    }
+    case WM_UPDATE_DOWNLOADED:{
+      std::unique_ptr<UpdateDownloadResult> result((UpdateDownloadResult*)lp);
+      updateDownloading=false;
+      updateReady=result&&result->success;
+      InvalidateRect(h,nullptr,FALSE);
+      if(updateReady)
+        MessageBoxW(h,L"更新已下载并校验完成。程序将在下次启动时自动更新。",
+                    L"下载完成",MB_OK|MB_ICONINFORMATION);
+      else
+        MessageBoxW(h,result?result->error.c_str():L"下载失败。",L"更新失败",
+                    MB_OK|MB_ICONERROR);
+      return 0;
+    }
     case WM_GETMINMAXINFO:{
       RECT bounds{0,0,MIN_WIDTH,MIN_HEIGHT};
       AdjustWindowRect(&bounds,WINDOW_STYLE,FALSE);
@@ -1102,8 +1484,21 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
       limits->ptMinTrackSize.y=bounds.bottom-bounds.top;
       return 0;
     }
+    case WM_ENTERSIZEMOVE:
+      resizingWindow=true;resizePending=false;return 0;
     case WM_SIZE:
-      if(wp!=SIZE_MINIMIZED){layoutControls();InvalidateRect(h,nullptr,FALSE);}
+      if(wp!=SIZE_MINIMIZED){
+        if(resizingWindow)resizePending=true;
+        else {layoutControls();InvalidateRect(h,nullptr,FALSE);}
+      }
+      return 0;
+    case WM_EXITSIZEMOVE:
+      resizingWindow=false;
+      if(resizePending){
+        resizePending=false;
+        layoutControls();
+        InvalidateRect(h,nullptr,FALSE);
+      }
       return 0;
     case WM_HSCROLL:
     case WM_VSCROLL:{
@@ -1138,6 +1533,9 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
       break;
     case WM_ERASEBKGND:return 1;
     case WM_PAINT:{
+      if(resizingWindow&&resizePending){
+        PAINTSTRUCT ps{};BeginPaint(h,&ps);EndPaint(h,&ps);return 0;
+      }
       PAINTSTRUCT ps;HDC dc=BeginPaint(h,&ps);
       RECT client{};GetClientRect(h,&client);
       HDC buffer=CreateCompatibleDC(dc);
@@ -1200,8 +1598,8 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         return (LRESULT)cardBrush;
       }
       SetTextColor(dc,child==riskText?RISK_COLORS[CATALOG[selected].level]:MUTED);
-      SetBkColor(dc,child==riskText?DARK:CARD);
-      return (LRESULT)(child==riskText?riskBrush:cardBrush);
+      SetBkColor(dc,CARD);
+      return (LRESULT)cardBrush;
     }
     case WM_CTLCOLOREDIT:
     case WM_CTLCOLORLISTBOX:{
@@ -1314,6 +1712,10 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         auto* paint=(NMLVCUSTOMDRAW*)lp;
         if(paint->nmcd.dwDrawStage==CDDS_PREPAINT)return CDRF_NOTIFYITEMDRAW;
         if(paint->nmcd.dwDrawStage==CDDS_ITEMPREPAINT){
+          if(notification->hwndFrom==containedList)return paintContainedRow(paint);
+          if(notification->hwndFrom==simpleList)return paintSimpleRow(paint);
+          if(notification->hwndFrom==egoList)return paintEgoRow(paint);
+          if(notification->hwndFrom==recommendationList)return paintRecommendationRow(paint);
           if(paint->nmcd.uItemState&CDIS_SELECTED)return CDRF_DODEFAULT;
           paint->clrTextBk=(paint->nmcd.dwItemSpec%2)?CARD:ROW;
           paint->clrText=INK;
@@ -1330,10 +1732,6 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
           else if(notification->hwndFrom==recommendationList&&paint->iSubItem==2&&
              row>=0&&row<(int)recommendationOrder.size())
             paint->clrText=RISK_COLORS[CATALOG[recommendationOrder[row]].level];
-          else if(notification->hwndFrom==containedList&&paint->iSubItem==1){
-            LVITEMW item{};item.mask=LVIF_PARAM;item.iItem=row;
-            if(ListView_GetItem(containedList,&item))paint->clrText=RISK_COLORS[CATALOG[item.lParam].level];
-          }
           return CDRF_DODEFAULT;
         }
         return CDRF_DODEFAULT;
@@ -1355,9 +1753,21 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         return 0;
       }
       if(notification->hwndFrom==egoList&&notification->code==LVN_COLUMNCLICK){
-        if(((NMLISTVIEW*)lp)->iSubItem==0){
-          egoIdDescending=!egoIdDescending;
+        int column=((NMLISTVIEW*)lp)->iSubItem;
+        if(column==0||column==2){
+          if(egoSortColumn==column)egoSortDescending=!egoSortDescending;
+          else {egoSortColumn=column;egoSortDescending=false;}
           rebuildEgoList();
+        }
+        return 0;
+      }
+      if(notification->hwndFrom==egoList&&notification->code==LVN_GETINFOTIPW){
+        auto* tip=(NMLVGETINFOTIPW*)lp;
+        if(tip->iItem>=0&&tip->iItem<(int)egoOrder.size()){
+          const auto& a=CATALOG[egoOrder[tip->iItem]];
+          std::wstring info=L"武器推荐度："+egoRecommendationText(a,true,true)+
+                            L"\n装备推荐度："+egoRecommendationText(a,false,true);
+          lstrcpynW(tip->pszText,info.c_str(),tip->cchTextMax);
         }
         return 0;
       }
@@ -1377,16 +1787,30 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
     case WM_DESTROY:
       DeleteObject(bodyFont);DeleteObject(smallFont);DeleteObject(titleFont);
       DeleteObject(sectionFont);DeleteObject(emphasisFont);DeleteObject(headerFont);
-      DeleteObject(cardBrush);DeleteObject(editBrush);DeleteObject(riskBrush);
+      DeleteObject(cardBrush);DeleteObject(editBrush);
       PostQuitMessage(0);return 0;
   }
   return DefWindowProcW(h,message,wp,lp);
 }
 int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
+  wchar_t path[MAX_PATH]{};
+  DWORD pathLength=GetModuleFileNameW(nullptr,path,MAX_PATH);
+  if(!pathLength||pathLength>=MAX_PATH)return 1;
+  programPath=path;
+  int argumentCount=0;
+  LPWSTR* arguments=CommandLineToArgvW(GetCommandLineW(),&argumentCount);
+  if(arguments&&argumentCount==4&&wcscmp(arguments[1],L"--apply-update")==0){
+    std::wstring target=arguments[2];
+    unsigned long parent=wcstoul(arguments[3],nullptr,10);
+    LocalFree(arguments);
+    return runUpdateHelper(programPath,target,parent);
+  }
+  if(arguments)LocalFree(arguments);
+  if(launchPendingUpdate(programPath))return 0;
   SetProcessDPIAware();
   INITCOMMONCONTROLSEX common{sizeof(INITCOMMONCONTROLSEX),ICC_LISTVIEW_CLASSES|ICC_TAB_CLASSES};
   InitCommonControlsEx(&common);
-  wchar_t path[MAX_PATH]{};GetModuleFileNameW(nullptr,path,MAX_PATH);iniPath=path;
+  iniPath=path;
   auto slash=iniPath.find_last_of(L"\\/");iniPath=iniPath.substr(0,slash+1)+L"LobotomyCorpCal.ini";
   WNDCLASSW cls{};cls.lpfnWndProc=wndProc;cls.hInstance=instance;
   cls.lpszClassName=L"LobotomyCorpCalCpp";cls.hCursor=LoadCursor(nullptr,IDC_ARROW);
@@ -1398,6 +1822,17 @@ int WINAPI wWinMain(HINSTANCE instance,HINSTANCE,LPWSTR,int show){
                              bounds.bottom-bounds.top,nullptr,nullptr,instance,nullptr);
   if(!window)return 1;
   ShowWindow(window,show);UpdateWindow(window);
+  try{
+    std::thread([window]{
+      try{
+        ReleaseInfo release;
+        if(checkForUpdate(release)){
+          auto* found=new ReleaseInfo(std::move(release));
+          if(!PostMessageW(window,WM_UPDATE_FOUND,0,(LPARAM)found))delete found;
+        }
+      }catch(...){} // 更新检查失败时仍可离线使用。
+    }).detach();
+  }catch(...){} // 无法启动后台线程时不影响主程序。
   MSG msg;while(GetMessageW(&msg,nullptr,0,0)>0){TranslateMessage(&msg);DispatchMessageW(&msg);}
   return 0;
 }
