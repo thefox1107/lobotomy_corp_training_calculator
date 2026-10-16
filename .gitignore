@@ -1,0 +1,11 @@
+# 本机状态与编译产物
+*.ini
+build/
+dist/
+
+# 编辑器
+.vscode/
+
+# 本地参考文件与 Office 临时文件
+references/*.xlsx
+~$*.xlsx
