@@ -19,12 +19,17 @@ WorkResult simulate(const PlanInput& in,int work){
   result.rate=in.rates[work][virtueLevel(value)-1];
   result.projected=value;
   if(result.rate==-101)return result;
-  while(value+1e-9<target&&result.count<1000){
-    double gain=in.boxes*FACTORS[virtueLevel(value)-1][std::clamp(in.level,0,4)]*healthFactor(work,in.hp,in.sp)*trainingFactor(in.tech,in.resident,in.clerks);
-    if(gain<=0)break;
-    if(result.count==0)result.firstGain=gain;
-    value=std::min((double)in.cap,std::round((value+gain)*1e10)/1e10);
-    result.count++;
+  if(value+1e-9<target){
+    // Keep the starting quality coefficient for the entire plan, even across
+    // quality thresholds. Preserve the existing work-specific health factor.
+    const double gain=in.boxes*FACTORS[virtueLevel(value)-1][std::clamp(in.level,0,4)]
+        *healthFactor(work,in.hp,in.sp)
+        *trainingFactor(in.tech,in.resident,in.clerks);
+    if(gain>0){
+      result.firstGain=gain;
+      result.count=(int)std::ceil((target-value-1e-9)/gain);
+      value=std::min((double)in.cap,value+result.count*gain);
+    }
   }
   result.projected=value;result.reached=value+1e-9>=target;result.remaining=std::max(0,result.count-in.completed[work]);
   return result;

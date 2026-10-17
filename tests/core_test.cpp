@@ -10,6 +10,15 @@ int main(){
   auto result=simulate(p,0);
   assert(result.count==9&&result.reached&&std::abs(result.firstGain-1.92)<1e-10);
   p.completed[0]=3;assert(simulate(p,0).remaining==6);
-  p.rates[0][0]=-40;assert(simulate(p,0).rate==-40);
-  p.rates[0][0]=-101;assert(simulate(p,0).count==0);
+  p.current[0]=40;p.target[0]=95;
+  result=simulate(p,0);
+  assert(result.count==32&&result.reached&&std::abs(result.firstGain-1.76)<1e-10);
+  p.level=0;p.boxes=7;p.cap=130;p.current[0]=84;p.target[0]=104;
+  result=simulate(p,0);
+  assert(result.count==40&&result.reached&&std::abs(result.firstGain-.504)<1e-10);
+  p.current[3]=40;p.target[3]=95;p.level=1;p.boxes=8;
+  result=simulate(p,3);
+  assert(result.count==25&&result.reached&&std::abs(result.firstGain-2.2)<1e-10);
+  p.rates[0][3]=-40;assert(simulate(p,0).rate==-40);
+  p.rates[0][3]=-101;assert(simulate(p,0).count==0);
 }

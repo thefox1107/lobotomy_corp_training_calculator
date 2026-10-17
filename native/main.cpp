@@ -45,7 +45,8 @@ static HWND win,abnoBox,nameEdit,riskText,capBox,stats[4],targets[4],done[4];
 static HWND techBox,residentBox,clerksBox,rates[4][5],doneMinus[4],donePlus[4],virtueLabels[4];
 static HWND abnoLabel,capLabel,attributeHeaders[4],residentLabel,clerksLabel;
 static HWND tabs;
-static HWND simpleList,containedList,availableCombo,containAddButton,containRemoveButton;
+static HWND simpleList,simpleEditCombo,containedList,availableCombo,containAddButton,containRemoveButton;
+static int simpleEditRow=-1,simpleEditColumn=-1;
 static int hoveredSimpleRow=-1;
 static bool trackingSimpleMouse=false;
 static int hoveredContainedRow=-1;
@@ -148,6 +149,7 @@ struct EmployeeState {
   bool tech=false;
   std::array<double,4> current{20,20,20,20},target{30,30,30,30};
   std::array<int,4> completed{0,0,0,0};
+  int actualWork=-1;
 };
 static std::vector<EmployeeState> employees;
 static int activeEmployee=0,selected=1,best=-1,missing=0;
@@ -186,6 +188,7 @@ static EmployeeState loadEmployee(const std::wstring& section){
   e.tech=readIni(section.c_str(),L"tech",L"0")==L"1";
   e.resident=std::clamp(_wtoi(readIni(section.c_str(),L"resident",L"0").c_str()),0,3);
   e.clerks=std::clamp(_wtoi(readIni(section.c_str(),L"clerks",L"0").c_str()),0,3);
+  e.actualWork=std::clamp(_wtoi(readIni(section.c_str(),L"actualWork",L"-1").c_str()),-1,3);
   for(int i=0;i<4;i++){
     auto n=std::to_wstring(i);
     e.current[i]=_wtof(readIni(section.c_str(),(L"current"+n).c_str(),L"20").c_str());
@@ -229,6 +232,7 @@ static void writeEmployee(int index){
   writeIni(section.c_str(),L"tech",e.tech?L"1":L"0");
   writeIni(section.c_str(),L"resident",std::to_wstring(e.resident));
   writeIni(section.c_str(),L"clerks",std::to_wstring(e.clerks));
+  writeIni(section.c_str(),L"actualWork",std::to_wstring(e.actualWork));
   for(int i=0;i<4;i++){
     auto n=std::to_wstring(i);
     writeIni(section.c_str(),(L"current"+n).c_str(),fmt(e.current[i],4));
@@ -428,6 +432,13 @@ static std::wstring simpleWork(const EmployeeState& e){
   if(bestWork>=0)return works[bestWork];
   return missingRate?L"待补录偏好":L"无推荐";
 }
+static int actualWorkIndex(const EmployeeState& e,const std::wstring& recommended){
+  if(e.actualWork>=0&&e.actualWork<4)return e.actualWork;
+  auto most=std::max_element(e.completed.begin(),e.completed.end());
+  if(*most>0)return (int)std::distance(e.completed.begin(),most);
+  for(int i=0;i<4;i++)if(recommended==works[i])return i;
+  return -1;
+}
 static void updateSimpleRow(int index){
   if(!simpleList||index<0||index>=(int)employees.size())return;
   const auto& e=employees[index];
@@ -435,13 +446,15 @@ static void updateSimpleRow(int index){
   auto level=L"Lv."+std::to_wstring(agentLevel(e.current));
   auto object=std::wstring(CATALOG[e.abnormality].name);
   auto work=simpleWork(e);
-  int total=0;for(int count:e.completed)total+=count;
-  auto completed=std::to_wstring(total)+L" 次";
+  int actual=actualWorkIndex(e,work);
+  std::wstring actualName=actual>=0?works[actual]:L"未选择";
+  auto completed=std::to_wstring(actual>=0?e.completed[actual]:0)+L" 次";
   ListView_SetItemText(simpleList,index,0,name.data());
   ListView_SetItemText(simpleList,index,1,level.data());
   ListView_SetItemText(simpleList,index,2,object.data());
   ListView_SetItemText(simpleList,index,3,work.data());
-  ListView_SetItemText(simpleList,index,4,completed.data());
+  ListView_SetItemText(simpleList,index,4,actualName.data());
+  ListView_SetItemText(simpleList,index,5,completed.data());
 }
 static void rebuildSimpleList(){
   if(!simpleList)return;
@@ -606,22 +619,26 @@ static void paintResults(HDC dc){
     return;
   }
   draw(dc,L"工作",674,617+dy,65,22,smallFont,MUTED);
-  draw(dc,L"属性",751+dw/4,617+dy,60,22,smallFont,MUTED);
-  draw(dc,L"偏好",816+dw/2,617+dy,66,22,smallFont,MUTED);
-  draw(dc,L"单次增益",892+dw*3/4,617+dy,88,22,smallFont,MUTED);
-  draw(dc,L"计划 / 已做 / 剩余",992+dw,617+dy,163,22,smallFont,MUTED);
+  draw(dc,L"属性",741+dw/5,617+dy,60,22,smallFont,MUTED);
+  draw(dc,L"偏好",807+dw*2/5,617+dy,60,22,smallFont,MUTED);
+  draw(dc,L"单次增益",872+dw*3/5,617+dy,82,22,smallFont,MUTED);
+  draw(dc,L"计划 / 剩余",955+dw*4/5,617+dy,86,22,smallFont,MUTED);
+  draw(dc,L"已完成工作",1043+dw,617+dy,113,22,smallFont,MUTED);
   for(int i=0;i<4;i++){
     int y=641+dy+i*22;auto r=viewResults[i];
     fill(dc,670,y,486+dw,21,i==best?WORK_BACKGROUNDS[i]:(i%2?CARD:ROW));
     if(i==best)fill(dc,670,y,3,21,WORK_COLORS[i]);
     draw(dc,works[i],677,y,60,21,bodyFont,WORK_COLORS[i]);
-    draw(dc,virtues[i],751+dw/4,y,60,21,bodyFont,WORK_COLORS[i]);
-    draw(dc,r.rate==-101?L"—":std::to_wstring(r.rate)+L"%",816+dw/2,y,70,21,bodyFont,
+    draw(dc,virtues[i],741+dw/5,y,60,21,bodyFont,WORK_COLORS[i]);
+    draw(dc,r.rate==-101?L"—":std::to_wstring(r.rate)+L"%",807+dw*2/5,y,60,21,bodyFont,
          r.rate>0?GREEN:MUTED);
-    draw(dc,r.rate==-101?L"—":fmt(r.firstGain),892+dw*3/4,y,88,21,bodyFont,INK);
+    draw(dc,r.rate==-101?L"—":fmt(r.firstGain),872+dw*3/5,y,82,21,bodyFont,INK);
     std::wstring count=r.rate==-101?L"—":std::to_wstring(r.count)+L" / "+
-                       std::to_wstring(viewPlan.completed[i])+L" / "+std::to_wstring(r.remaining);
-    draw(dc,count,992+dw,y,163,21,bodyFont,INK);
+                       std::to_wstring(r.remaining);
+    draw(dc,count,955+dw*4/5,y,86,21,bodyFont,INK);
+    std::wstring completed=std::wstring(works[i])+L" "+
+                           std::to_wstring(viewPlan.completed[i])+L" 次";
+    draw(dc,completed,1043+dw,y,113,21,bodyFont,WORK_COLORS[i]);
   }
   if(viewPlan.level==3)draw(dc,L"WAW 连续工作过载未计入估算。",672,729+dy,482+dw,17,smallFont,MUTED);
 }
@@ -715,7 +732,7 @@ static void paintOtherPage(HDC dc){
   paintHeader(dc,pageNames[currentPage],currentPage);
   card(dc,22,92,1156+extraWidth(),656+extraHeight());
   const wchar_t* descriptions[]={
-    L"全部员工的等级、工作对象、推荐工作类型和已完成总次数。双击员工可进入详细模式。",
+    L"双击工作对象或实际工作类型可下拉调整；双击员工姓名可进入详细模式。已完成次数按实际工作类型分别显示。",
     L"",
     L"在这里添加或移除当前收容的异想体。员工只能选择已收容对象。",
     L"参考工作簿的原始推荐评级。点击编号、等级或收容推荐的表头可切换排序。",
@@ -882,11 +899,11 @@ static LRESULT paintSimpleRow(const NMLVCUSTOMDRAW* custom){
   int row=(int)custom->nmcd.dwItemSpec;
   if(row<0||row>=(int)employees.size())return CDRF_DODEFAULT;
   int level=std::clamp(agentLevel(employees[row].current),1,5)-1;
-  RECT rowRect{},client{},cells[5]{};
+  RECT rowRect{},client{},cells[6]{};
   if(!ListView_GetItemRect(simpleList,row,&rowRect,LVIR_BOUNDS)||
      !ListView_GetSubItemRect(simpleList,row,0,LVIR_LABEL,&cells[0]))
     return CDRF_DODEFAULT;
-  for(int column=1;column<5;column++)
+  for(int column=1;column<6;column++)
     if(!ListView_GetSubItemRect(simpleList,row,column,LVIR_BOUNDS,&cells[column]))
       return CDRF_DODEFAULT;
   GetClientRect(simpleList,&client);
@@ -901,12 +918,12 @@ static LRESULT paintSimpleRow(const NMLVCUSTOMDRAW* custom){
   fill(custom->nmcd.hdc,0,rowRect.top,client.right,height,CARD);
   int pillLeft=std::max(6,(int)rowRect.left+6);
   int pillRight=std::min((int)client.right-6,
-                         std::max((int)rowRect.right,(int)cells[4].right)-6);
+                         std::max((int)rowRect.right,(int)cells[5].right)-6);
   rounded(custom->nmcd.hdc,pillLeft,rowRect.top+2,std::max(0,pillRight-pillLeft),
           std::max(0,height-4),background,background);
   if(selected)fill(custom->nmcd.hdc,pillLeft+3,rowRect.top+5,3,
                    std::max(0,height-10),foreground);
-  for(int column=0;column<5;column++){
+  for(int column=0;column<6;column++){
     wchar_t value[256]{};
     ListView_GetItemText(simpleList,row,column,value,256);
     int left=cells[column].left+12;
@@ -1247,6 +1264,8 @@ static void rebuildEgoList(){
 static void layoutControls();
 static void switchPage(int page){
   if(page<0||page>=PAGE_COUNT||page==currentPage)return;
+  if(simpleEditCombo)ShowWindow(simpleEditCombo,SW_HIDE);
+  simpleEditRow=simpleEditColumn=-1;
   saveState();currentPage=page;
   for(int i=0;i<PAGE_COUNT;i++)for(HWND item:pageControls[i])ShowWindow(item,i==page?SW_SHOW:SW_HIDE);
   if(page==0)rebuildSimpleList();
@@ -1271,6 +1290,63 @@ static void loadActiveEmployee(){
   fillRates();
   rebuildNavigation();
   updateOutput();
+}
+static void finishSimpleEdit(){
+  int row=simpleEditRow,column=simpleEditColumn;
+  simpleEditRow=simpleEditColumn=-1;
+  int choice=(int)SendMessageW(simpleEditCombo,CB_GETCURSEL,0,0);
+  ShowWindow(simpleEditCombo,SW_HIDE);
+  if(row<0||row>=(int)employees.size()||choice<0)return;
+  auto& employee=employees[row];
+  if(column==2){
+    int abnormality=(int)SendMessageW(simpleEditCombo,CB_GETITEMDATA,choice,0);
+    if(abnormality<0||abnormality>=CATALOG_SIZE||abnormality==employee.abnormality)return;
+    employee.abnormality=abnormality;
+    if(row==activeEmployee)loadActiveEmployee();
+  }else if(column==4){
+    if(choice==employee.actualWork)return;
+    employee.actualWork=choice;
+  }else return;
+  writeEmployee(row);
+  updateSimpleRow(row);
+  ListView_RedrawItems(simpleList,row,row);
+}
+static void beginSimpleEdit(int row,int column){
+  if(!simpleEditCombo||row<0||row>=(int)employees.size()||
+     (column!=2&&column!=4))return;
+  saveState();
+  simpleEditRow=row;simpleEditColumn=column;
+  SendMessageW(simpleEditCombo,CB_RESETCONTENT,0,0);
+  int selectedChoice=-1;
+  if(column==2){
+    for(int i=0;i<CATALOG_SIZE;i++)if(contained[i]){
+      std::wstring caption=std::wstring(CATALOG[i].id)+L"  "+CATALOG[i].name;
+      int choice=(int)SendMessageW(simpleEditCombo,CB_ADDSTRING,0,(LPARAM)caption.c_str());
+      SendMessageW(simpleEditCombo,CB_SETITEMDATA,choice,i);
+      if(i==employees[row].abnormality)selectedChoice=choice;
+    }
+  }else{
+    for(const wchar_t* work:works)SendMessageW(simpleEditCombo,CB_ADDSTRING,0,(LPARAM)work);
+    selectedChoice=actualWorkIndex(employees[row],simpleWork(employees[row]));
+  }
+  if(SendMessageW(simpleEditCombo,CB_GETCOUNT,0,0)<=0){
+    simpleEditRow=simpleEditColumn=-1;return;
+  }
+  SendMessageW(simpleEditCombo,CB_SETCURSEL,selectedChoice,0);
+  RECT cell{};
+  if(!ListView_GetSubItemRect(simpleList,row,column,LVIR_BOUNDS,&cell)){
+    simpleEditRow=simpleEditColumn=-1;return;
+  }
+  RECT visible{};GetClientRect(simpleList,&visible);
+  cell.left=std::max(cell.left,visible.left+2);
+  cell.right=std::min(cell.right,visible.right-2);
+  if(cell.right-cell.left<45){simpleEditRow=simpleEditColumn=-1;return;}
+  MapWindowPoints(simpleList,win,(POINT*)&cell,2);
+  SetWindowPos(simpleEditCombo,HWND_TOP,cell.left,cell.top,
+               cell.right-cell.left,column==2?300:170,SWP_SHOWWINDOW);
+  roundControl(simpleEditCombo,12);
+  SetFocus(simpleEditCombo);
+  SendMessageW(simpleEditCombo,CB_SHOWDROPDOWN,TRUE,0);
 }
 static void switchEmployee(int index){
   if(index<0||index>=(int)employees.size()||index==activeEmployee)return;
@@ -1337,9 +1413,16 @@ static void initialize(){
                          46,172,1110,550,610);
   ListView_SetExtendedListViewStyle(simpleList,LVS_EX_FULLROWSELECT|LVS_EX_DOUBLEBUFFER);
   SetWindowSubclass(simpleList,coloredListSubclass,1,0);
-  const wchar_t* simpleHeaders[]={L"员工",L"等级",L"工作对象",L"推荐工作类型",L"已完成总数"};
-  const int simpleWidths[]={230,95,390,220,160};
-  for(int i=0;i<5;i++)addColumn(simpleList,i,simpleHeaders[i],simpleWidths[i]);
+  const wchar_t* simpleHeaders[]={L"员工",L"等级",L"工作对象",L"推荐工作类型",L"实际工作类型",L"已完成工作"};
+  const int simpleWidths[]={190,80,310,185,180,160};
+  for(int i=0;i<6;i++)addColumn(simpleList,i,simpleHeaders[i],simpleWidths[i]);
+  simpleEditCombo=CreateWindowExW(0,L"COMBOBOX",L"",
+      WS_CHILD|WS_VSCROLL|CBS_DROPDOWNLIST|CBS_OWNERDRAWFIXED|CBS_HASSTRINGS,
+      0,0,1,200,win,(HMENU)(INT_PTR)611,GetModuleHandleW(nullptr),nullptr);
+  SendMessageW(simpleEditCombo,WM_SETFONT,(WPARAM)bodyFont,TRUE);
+  SendMessageW(simpleEditCombo,CB_SETITEMHEIGHT,(WPARAM)-1,28);
+  SendMessageW(simpleEditCombo,CB_SETITEMHEIGHT,0,27);
+  SetWindowSubclass(simpleEditCombo,comboSubclass,1,0);
 
   availableCombo=pageControl(2,L"COMBOBOX",L"",CBS_DROPDOWNLIST|WS_VSCROLL,46,163,595,300,702);
   containAddButton=pageControl(2,L"BUTTON",L"＋ 添加收容",BS_PUSHBUTTON,657,163,147,29,700);
@@ -1656,6 +1739,10 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
       }
       if(!ready)return 0;
       int id=LOWORD(wp),event=HIWORD(wp);
+      if(id==611){
+        if(event==CBN_CLOSEUP)finishSimpleEdit();
+        return 0;
+      }
       if(id==500&&event==BN_CLICKED){
         if(employees.size()>=200)return 0;
         saveState();
@@ -1724,7 +1811,6 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         if(choice<0)return 0;
         selected=(int)SendMessageW(abnoBox,CB_GETITEMDATA,choice,0);
         ready=false;setText(riskText,levels[CATALOG[selected].level]);
-        for(HWND item:done)setText(item,L"0");
         fillRates();saveState();updateOutput();return 0;
       }
       if(event==EN_CHANGE||event==CBN_SELCHANGE||event==BN_CLICKED){
@@ -1775,8 +1861,14 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
         switchEmployee(TabCtrl_GetCurSel(tabs));return 0;
       }
       if(notification->hwndFrom==simpleList&&notification->code==NM_DBLCLK){
-        int row=ListView_GetNextItem(simpleList,-1,LVNI_SELECTED);
-        if(row>=0){switchEmployee(row);switchPage(1);}return 0;
+        auto* clicked=(NMITEMACTIVATE*)lp;
+        int row=clicked->iItem;
+        if(row>=0){
+          if(clicked->iSubItem==2||clicked->iSubItem==4)
+            beginSimpleEdit(row,clicked->iSubItem);
+          else{switchEmployee(row);switchPage(1);}
+        }
+        return 0;
       }
       if(notification->hwndFrom==recommendationList&&notification->code==LVN_COLUMNCLICK){
         int column=((NMLISTVIEW*)lp)->iSubItem;

@@ -206,9 +206,9 @@ bool getHttps(const std::wstring& url,std::uint64_t limit,
   std::wstring host(pieces.lpszHostName,pieces.dwHostNameLength);
   std::wstring resource(pieces.lpszUrlPath,pieces.dwUrlPathLength);
   if(pieces.lpszExtraInfo)resource.append(pieces.lpszExtraInfo,pieces.dwExtraInfoLength);
-  Internet session(WinHttpOpen(L"LobotomyCorpCal/0.3.3",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
+  Internet session(WinHttpOpen(L"LobotomyCorpCal/0.3.4",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,
                                WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0));
-  if(!session)session.reset(WinHttpOpen(L"LobotomyCorpCal/0.3.3",
+  if(!session)session.reset(WinHttpOpen(L"LobotomyCorpCal/0.3.4",
                                        WINHTTP_ACCESS_TYPE_DEFAULT_PROXY,
                                        WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0));
   if(!session)return false;
