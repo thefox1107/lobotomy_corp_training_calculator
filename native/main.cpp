@@ -732,7 +732,7 @@ static void paintOtherPage(HDC dc){
   paintHeader(dc,pageNames[currentPage],currentPage);
   card(dc,22,92,1156+extraWidth(),656+extraHeight());
   const wchar_t* descriptions[]={
-    L"双击工作对象或实际工作类型可下拉调整；双击员工姓名可进入详细模式。已完成次数按实际工作类型分别显示。",
+    L"双击工作对象或实际工作类型可下拉调整；已完成工作栏用 − / + 修改对应次数。双击员工姓名可进入详细模式。",
     L"",
     L"在这里添加或移除当前收容的异想体。员工只能选择已收容对象。",
     L"参考工作簿的原始推荐评级。点击编号、等级或收容推荐的表头可切换排序。",
@@ -895,6 +895,14 @@ static LRESULT paintContainedRow(const NMLVCUSTOMDRAW* custom){
        bodyFont,foreground);
   return CDRF_SKIPDEFAULT;
 }
+static RECT simpleCountButtonRect(int row,bool plus){
+  RECT cell{},rowRect{};
+  if(!ListView_GetSubItemRect(simpleList,row,5,LVIR_BOUNDS,&cell)||
+     !ListView_GetItemRect(simpleList,row,&rowRect,LVIR_BOUNDS))return {};
+  int left=cell.right-(plus?40:70);
+  int top=(rowRect.top+rowRect.bottom-22)/2;
+  return {left,top,left+26,top+22};
+}
 static LRESULT paintSimpleRow(const NMLVCUSTOMDRAW* custom){
   int row=(int)custom->nmcd.dwItemSpec;
   if(row<0||row>=(int)employees.size())return CDRF_DODEFAULT;
@@ -927,9 +935,21 @@ static LRESULT paintSimpleRow(const NMLVCUSTOMDRAW* custom){
     wchar_t value[256]{};
     ListView_GetItemText(simpleList,row,column,value,256);
     int left=cells[column].left+12;
-    int right=cells[column].right-10;
+    int right=column==5?simpleCountButtonRect(row,false).left-6:cells[column].right-10;
     draw(custom->nmcd.hdc,value,left,rowRect.top+2,std::max(0,right-left),height-4,
          bodyFont,foreground);
+  }
+  int actual=actualWorkIndex(employees[row],simpleWork(employees[row]));
+  for(bool plus:{false,true}){
+    RECT button=simpleCountButtonRect(row,plus);
+    bool enabled=actual>=0&&(plus?employees[row].completed[actual]<10000:
+                                  employees[row].completed[actual]>0);
+    COLORREF background=enabled?(plus?SOFT_GREEN:SOFT_RED):FIELD;
+    COLORREF color=enabled?(plus?GREEN:RED):MUTED;
+    rounded(custom->nmcd.hdc,button.left,button.top,
+            button.right-button.left,button.bottom-button.top,background,background);
+    draw(custom->nmcd.hdc,plus?L"+":L"−",button.left,button.top,
+         button.right-button.left,button.bottom-button.top,bodyFont,color,DT_CENTER);
   }
   return CDRF_SKIPDEFAULT;
 }
@@ -1347,6 +1367,31 @@ static void beginSimpleEdit(int row,int column){
   roundControl(simpleEditCombo,12);
   SetFocus(simpleEditCombo);
   SendMessageW(simpleEditCombo,CB_SHOWDROPDOWN,TRUE,0);
+}
+static bool adjustSimpleCompleted(int row,POINT point){
+  if(row<0||row>=(int)employees.size())return false;
+  RECT minusButton=simpleCountButtonRect(row,false);
+  RECT plusButton=simpleCountButtonRect(row,true);
+  bool plus=false;
+  if(PtInRect(&minusButton,point))plus=false;
+  else if(PtInRect(&plusButton,point))plus=true;
+  else return false;
+  saveState();
+  auto& employee=employees[row];
+  int work=actualWorkIndex(employee,simpleWork(employee));
+  if(work<0)return true;
+  int next=std::clamp(employee.completed[work]+(plus?1:-1),0,10000);
+  if(next==employee.completed[work])return true;
+  employee.actualWork=work;
+  employee.completed[work]=next;
+  if(row==activeEmployee){
+    ready=false;setText(done[work],std::to_wstring(next));ready=true;
+    updateOutput();
+  }
+  writeEmployee(row);
+  updateSimpleRow(row);
+  ListView_RedrawItems(simpleList,row,row);
+  return true;
 }
 static void switchEmployee(int index){
   if(index<0||index>=(int)employees.size()||index==activeEmployee)return;
@@ -1860,10 +1905,19 @@ static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
       if(notification->hwndFrom==tabs&&notification->code==TCN_SELCHANGE){
         switchEmployee(TabCtrl_GetCurSel(tabs));return 0;
       }
+      if(notification->hwndFrom==simpleList&&notification->code==NM_CLICK){
+        auto* clicked=(NMITEMACTIVATE*)lp;
+        if(adjustSimpleCompleted(clicked->iItem,clicked->ptAction))
+          return 0;
+      }
       if(notification->hwndFrom==simpleList&&notification->code==NM_DBLCLK){
         auto* clicked=(NMITEMACTIVATE*)lp;
         int row=clicked->iItem;
         if(row>=0){
+          RECT minusButton=simpleCountButtonRect(row,false);
+          RECT plusButton=simpleCountButtonRect(row,true);
+          if(PtInRect(&minusButton,clicked->ptAction)||
+             PtInRect(&plusButton,clicked->ptAction))return 0;
           if(clicked->iSubItem==2||clicked->iSubItem==4)
             beginSimpleEdit(row,clicked->iSubItem);
           else{switchEmployee(row);switchPage(1);}
