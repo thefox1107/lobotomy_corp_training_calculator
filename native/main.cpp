@@ -33,6 +33,7 @@ static constexpr COLORREF SHADOW=RGB(228,232,230), PANEL=RGB(38,50,55);
 static constexpr COLORREF FIELD=RGB(250,251,250), HEADER_BG=RGB(242,246,244);
 static constexpr COLORREF WORK_COLORS[]={RED,RGB(112,120,123),RGB(124,76,157),RGB(48,112,177)};
 static constexpr COLORREF WORK_BACKGROUNDS[]={SOFT_RED,RGB(241,243,243),RGB(245,239,249),RGB(235,243,251)};
+static constexpr int MIN_RECOMMENDED_RATE=60;
 static constexpr COLORREF RISK_COLORS[]={
   RGB(46,128,66),   // ZAYIN: green
   RGB(48,112,177),  // TETH: blue
@@ -154,7 +155,8 @@ static bool ready=false,trainingComplete=false;
 static const wchar_t* works[]={L"本能",L"洞察",L"沟通",L"压迫"};
 static const wchar_t* virtues[]={L"勇气",L"谨慎",L"自律",L"正义"};
 static const wchar_t* levels[]={L"ZAYIN",L"TETH",L"HE",L"WAW",L"ALEPH"};
-static const double expectedBoxes[]={5,8,12,18,23};
+// 参考工作簿“加班计算器”中的各危险等级期望 PE-BOX 数。
+static const double expectedBoxes[]={7,8,12,16,23};
 static const wchar_t* pageNames[]={L"简单模式",L"详细模式",L"当前收容",L"收容推荐",L"E.G.O 库存",L"使用说明"};
 static constexpr int sidebarPages[]={HELP_PAGE,0,1,2,3,4};
 
@@ -259,7 +261,7 @@ static void clipDetailControl(HWND item,bool roundedShape,int diameter){
   HRGN visible=CreateRectRgn(left,top,right,bottom);
   CombineRgn(shape,shape,visible,RGN_AND);
   DeleteObject(visible);
-  if(!SetWindowRgn(item,shape,TRUE))DeleteObject(shape);
+  if(!SetWindowRgn(item,shape,FALSE))DeleteObject(shape);
 }
 static LRESULT CALLBACK comboSubclass(HWND combo,UINT message,WPARAM wp,LPARAM lp,
                                       UINT_PTR,DWORD_PTR){
@@ -379,7 +381,7 @@ static void updateOutput(){
       auto r=viewResults[i];
       if(r.rate==-101){missing++;allDone=false;}
       if(r.remaining>0||!r.reached)allDone=false;
-      if(r.rate>0&&r.remaining>0&&r.rate>bestRate){best=i;bestRate=r.rate;}
+      if(r.rate>=MIN_RECOMMENDED_RATE&&r.remaining>0&&r.rate>bestRate){best=i;bestRate=r.rate;}
     }
     if(allDone){
       trainingComplete=true;best=-1;
@@ -394,7 +396,7 @@ static void updateOutput(){
       detail=L"请按 Wiki 数值填写空白偏好后再查看推荐。";
     }else{
       summary=L"当前没有可推荐工作";
-      detail=L"训练目标已达到，或剩余工作的基础偏好不大于 0%。";
+      detail=L"训练目标已达到，或剩余工作的基础偏好均低于 60%。";
     }
   }
   InvalidateRect(win,nullptr,FALSE);
@@ -420,7 +422,7 @@ static std::wstring simpleWork(const EmployeeState& e){
     auto r=simulate(p,i);
     if(r.rate==-101){missingRate=true;allDone=false;}
     if(r.remaining>0||!r.reached)allDone=false;
-    if(r.rate>0&&r.remaining>0&&r.rate>bestRate){bestRate=r.rate;bestWork=i;}
+    if(r.rate>=MIN_RECOMMENDED_RATE&&r.remaining>0&&r.rate>bestRate){bestRate=r.rate;bestWork=i;}
   }
   if(allDone)return L"已完成";
   if(bestWork>=0)return works[bestWork];
@@ -1440,8 +1442,9 @@ static void layoutControls(){
     }
     const bool resized=!layout.placed||layout.lastW!=w||layout.lastH!=h;
     const bool moved=resized||layout.lastX!=x||layout.lastY!=y;
-    if(moved&&!SetWindowPos(layout.item,nullptr,x,y,w,h,
-                            SWP_NOZORDER|SWP_NOACTIVATE))continue;
+    UINT flags=SWP_NOZORDER|SWP_NOACTIVATE;
+    if(layout.page==1)flags|=SWP_NOCOPYBITS|SWP_NOREDRAW;
+    if(moved&&!SetWindowPos(layout.item,nullptr,x,y,w,h,flags))continue;
     if(layout.page==1){
       const int left=std::clamp(SIDEBAR_WIDTH-x,0,w);
       const int top=std::clamp(-y,0,h);
@@ -1459,6 +1462,8 @@ static void layoutControls(){
     layout.placed=true;
   }
   layingOut=false;
+  if(currentPage==1)
+    RedrawWindow(win,nullptr,nullptr,RDW_INVALIDATE|RDW_ERASE|RDW_ALLCHILDREN);
 }
 static LRESULT CALLBACK wndProc(HWND h,UINT message,WPARAM wp,LPARAM lp){
   switch(message){

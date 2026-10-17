@@ -9,7 +9,7 @@
 1. 从 [GitHub Releases](https://github.com/thefox1107/lobotomy_corp_training_calculator/releases) 下载 `LobotomyCorpCal.exe`。如果暂时没有发布附件，可按下方说明从源码构建。
 2. 将 `.exe` 放入可写入的普通文件夹，双击运行。程序会在同一目录保存 `LobotomyCorpCal.ini`，无需安装 Node.js、Java 或 Python。
 
-当前程序版本为 v0.3.1。启动时会在后台检查本仓库的最新正式版 Release；离线时仍可照常使用。发现更新后，程序会询问是否下载。下载先尝试 GitHub，失败时尝试 [GH-Proxy 镜像](https://gh-proxy.com/docs/github-accelerator)，并按 Release 提供的 SHA-256 摘要校验文件；缺少摘要的附件不会自动安装。下载成功后关闭程序，再次启动旧版 exe 即会自动替换并打开新版。更新文件暂存在 exe 所在目录，因此该目录需要可写；如有其他程序实例仍在运行，需先全部关闭。每次发布新版时，需同步修改 `native/updater.hpp` 中的 `APP_VERSION`，并上传名为 `LobotomyCorpCal.exe` 的 Release 附件。
+当前程序版本为 v0.3.3。启动时会在后台检查本仓库的最新正式版 Release；离线时仍可照常使用。发现更新后，程序会询问是否下载。下载先尝试 GitHub，失败时尝试 [GH-Proxy 镜像](https://gh-proxy.com/docs/github-accelerator)，并按 Release 提供的 SHA-256 摘要校验文件；缺少摘要的附件不会自动安装。下载成功后关闭程序，再次启动旧版 exe 即会自动替换并打开新版。更新文件暂存在 exe 所在目录，因此该目录需要可写；如有其他程序实例仍在运行，需先全部关闭。每次发布新版时，需同步修改 `native/updater.hpp` 中的 `APP_VERSION`，并上传名为 `LobotomyCorpCal.exe` 的 Release 附件。
 
 国内镜像是第三方代理。若 GitHub API 不可用，版本信息与校验摘要也会经由镜像获取。
 
@@ -27,7 +27,7 @@
 
 ### 次数说明
 
-每一行对应一种工作及其训练的属性。计划次数从当前属性计算到该项目标；剩余次数为计划次数减去已完成次数，最低为 0。填写“已完成”只更新进度，不会自动改动当前属性。推荐从仍需训练且基础偏好大于 0% 的工作中选择。
+每一行对应一种工作及其训练的属性。计划次数从当前属性计算到该项目标；剩余次数为计划次数减去已完成次数，最低为 0。填写“已完成”只更新进度，不会自动改动当前属性。推荐仅从仍需训练且基础工作成功率不低于 60% 的工作中选择；低于 60% 的工作仍显示估算结果，但不会被推荐。
 
 ### 保存与迁移
 
@@ -37,7 +37,7 @@
 
 程序收录 84 个对象，其中 65 个具有常规四类工作的五级偏好数据；19 个工具类或无法收容的对象会显示“没有常规工作”，不参与训练推荐。名称与危险等级按本地参考工作簿核对；收容与装备推荐来自下文注明的参考工作簿；E.G.O 数量上限参考 [Wiki 装备表](https://lobotomycorp.fandom.com/wiki/Equipment) 的基础持有上限，不包含 Gebura 研究增加的数量。武器与防具名称参考 Wiki 的 [E.G.O 武器](https://lobotomycorp.fandom.com/zh/wiki/E.G.O_%E6%AD%A6%E5%99%A8) 和 [E.G.O 护甲](https://lobotomycorp.fandom.com/zh/wiki/E.G.O_%E6%8A%A4%E7%94%B2) 速查表。属性计算参考 [脑叶公司 Wiki 的职员页面](https://lobotomycorp.fandom.com/zh/wiki/%E8%81%8C%E5%91%98)，偏好参考 [异想体页面](https://lobotomycorp.fandom.com/zh/wiki/%E5%BC%82%E6%83%B3%E4%BD%93)。
 
-程序会在属性跨过品质门槛后改用新等级的训练系数。预计 PE-BOX 按对象危险等级固定为 ZAYIN 5、TETH 8、HE 12、WAW 18、ALEPH 23；计算按工作结束时生命和精神均为 100% 估算。程序不模拟工作中断、受到伤害的过程、异想体特殊能力、饰品或 WAW 连续工作过载。
+程序会在属性跨过品质门槛后改用新等级的训练系数。预计 PE-BOX 按对象危险等级固定为 ZAYIN 7、TETH 8、HE 12、WAW 16、ALEPH 23；计算按工作结束时生命和精神均为 100% 估算。程序不模拟工作中断、受到伤害的过程、异想体特殊能力、饰品或 WAW 连续工作过载。
 
 ## 从源码构建
 
