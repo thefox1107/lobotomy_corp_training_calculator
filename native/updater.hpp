@@ -2,7 +2,7 @@
 #include <cstdint>
 #include <string>
 
-inline constexpr wchar_t APP_VERSION[]=L"0.3.4";
+inline constexpr wchar_t APP_VERSION[]=L"0.4.0";
 
 struct ReleaseInfo {
   std::wstring tag;

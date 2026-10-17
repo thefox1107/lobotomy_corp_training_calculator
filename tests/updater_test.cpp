@@ -4,8 +4,10 @@
 #include <string>
 
 int main(){
-  assert(isNewerVersion(L"v0.3.5",APP_VERSION));
-  assert(isNewerVersion(L"v0.4.0",APP_VERSION));
+  assert(isNewerVersion(L"v0.4.1",APP_VERSION));
+  assert(isNewerVersion(L"v0.5.0",APP_VERSION));
+  assert(!isNewerVersion(L"v0.4.0",APP_VERSION));
+  assert(!isNewerVersion(L"v0.3.5",APP_VERSION));
   assert(!isNewerVersion(L"v0.3.4",APP_VERSION));
   assert(!isNewerVersion(L"v0.3.3",APP_VERSION));
   assert(!isNewerVersion(L"v0.3.2",APP_VERSION));

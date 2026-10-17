@@ -9,7 +9,7 @@
 1. 从 [GitHub Releases](https://github.com/thefox1107/lobotomy_corp_training_calculator/releases) 下载 `LobotomyCorpCal.exe`。如果暂时没有发布附件，可按下方说明从源码构建。
 2. 将 `.exe` 放入可写入的普通文件夹，双击运行。程序会在同一目录保存 `LobotomyCorpCal.ini`，无需安装 Node.js、Java 或 Python。
 
-当前程序版本为 v0.3.4。启动时会在后台检查本仓库的最新正式版 Release；离线时仍可照常使用。发现更新后，程序会询问是否下载。下载先尝试 GitHub，失败时尝试 [GH-Proxy 镜像](https://gh-proxy.com/docs/github-accelerator)，并按 Release 提供的 SHA-256 摘要校验文件；缺少摘要的附件不会自动安装。下载成功后关闭程序，再次启动旧版 exe 即会自动替换并打开新版。更新文件暂存在 exe 所在目录，因此该目录需要可写；如有其他程序实例仍在运行，需先全部关闭。每次发布新版时，需同步修改 `native/updater.hpp` 中的 `APP_VERSION`，并上传名为 `LobotomyCorpCal.exe` 的 Release 附件。
+当前程序版本为 v0.4.0。启动时会在后台检查本仓库的最新正式版 Release；离线时仍可照常使用。发现更新后，程序会询问是否下载。下载先尝试 GitHub，失败时尝试 [GH-Proxy 镜像](https://gh-proxy.com/docs/github-accelerator)，并按 Release 提供的 SHA-256 摘要校验文件；缺少摘要的附件不会自动安装。下载成功后关闭程序，再次启动旧版 exe 即会自动替换并打开新版。更新文件暂存在 exe 所在目录，因此该目录需要可写；如有其他程序实例仍在运行，需先全部关闭。每次发布新版时，需同步修改 `native/updater.hpp` 中的 `APP_VERSION`，并上传名为 `LobotomyCorpCal.exe` 的 Release 附件。
 
 国内镜像是第三方代理。若 GitHub API 不可用，版本信息与校验摘要也会经由镜像获取。
 
